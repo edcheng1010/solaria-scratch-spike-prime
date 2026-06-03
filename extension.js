@@ -1941,7 +1941,6 @@ if __name__ == '__main__':\r
     let leftPort = "E", rightPort = "F";
     let tempo = 120;
     const sysCache = { battery: 0, temperature: 0, charging: false };
-    const btnSubscribed = { Left: false, Right: false };
     const flags = {
       hubConnected: false,
       hubDisconnected: false,
@@ -1956,13 +1955,8 @@ if __name__ == '__main__':\r
     function onClientEvent(ev) {
       if (ev.type === "connected") {
         flags.hubConnected = true;
-        send({ cmd: "system.subscribe", metric: "battery", interval: 5e3 });
-        send({ cmd: "system.subscribe", metric: "temperature", interval: 5e3 });
-        send({ cmd: "system.subscribe", metric: "charging", interval: 5e3 });
       } else if (ev.type === "disconnected") {
         flags.hubDisconnected = true;
-        btnSubscribed.Left = false;
-        btnSubscribed.Right = false;
         client = null;
       } else if (ev.type === "ssp") {
         routeSSP(ev.event);
@@ -2382,6 +2376,13 @@ if __name__ == '__main__':\r
             { opcode: "getVolume", blockType: BlockType.REPORTER, text: "hub volume (%)" },
             "---",
             { blockType: BlockType.LABEL, text: "System" },
+            // Command blocks trigger a one-shot read (mirrors GetBatteryLevel / GetTemperature /
+            // IsCharging in LegoSpikeSystem). The hub responds asynchronously; routeSSP caches
+            // the value so the reporters below return it on the next Scratch tick.
+            { opcode: "requestBatteryLevel", blockType: BlockType.COMMAND, text: "get hub battery level" },
+            { opcode: "requestTemperature", blockType: BlockType.COMMAND, text: "get hub temperature" },
+            { opcode: "requestCharging", blockType: BlockType.COMMAND, text: "get hub charging state" },
+            // Reporters return the last cached value (updated by the commands above).
             { opcode: "getBatteryLevel", blockType: BlockType.REPORTER, text: "hub battery (%)" },
             { opcode: "getTemperature", blockType: BlockType.REPORTER, text: "hub temperature (\xB0C)" },
             { opcode: "isCharging", blockType: BlockType.BOOLEAN, text: "hub charging?" },
@@ -2689,19 +2690,11 @@ if __name__ == '__main__':\r
         return v;
       }
       whenHubButtonPressed({ BUTTON }) {
-        if (client && !btnSubscribed[BUTTON]) {
-          btnSubscribed[BUTTON] = true;
-          send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
-        }
         const v = !!flags.buttonPressed[BUTTON];
         flags.buttonPressed[BUTTON] = false;
         return v;
       }
       whenHubButtonReleased({ BUTTON }) {
-        if (client && !btnSubscribed[BUTTON]) {
-          btnSubscribed[BUTTON] = true;
-          send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
-        }
         const v = !!flags.buttonReleased[BUTTON];
         flags.buttonReleased[BUTTON] = false;
         return v;
@@ -2712,8 +2705,8 @@ if __name__ == '__main__':\r
       subscribeToDistance({ PORT }) {
         return send({ cmd: "sensor.subscribe", port: PORT, type: "distance", mode: "on_change" });
       }
+      // Mirrors SubscribeToHubLeftButton / SubscribeToHubRightButton in LegoSpikeSensors.
       subscribeToHubButton({ BUTTON }) {
-        btnSubscribed[BUTTON] = true;
         return send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
       }
       // ── Sound ──────────────────────────────────────────────────────────────────────
@@ -2737,8 +2730,18 @@ if __name__ == '__main__':\r
         return ev ? ev.value : 0;
       }
       // ── System ──────────────────────────────────────────────────────────────────────
-      // These reporters return the cached value (populated by system.subscribe started at connect).
-      // First call after connect may return 0 until the first subscription event arrives (~5 s).
+      // Command blocks (fire-and-forget, mirror GetBatteryLevel/GetTemperature/IsCharging
+      // in LegoSpikeSystem). Hub responds asynchronously; routeSSP caches the value.
+      requestBatteryLevel() {
+        return send({ cmd: "system.read", metric: "battery" });
+      }
+      requestTemperature() {
+        return send({ cmd: "system.read", metric: "temperature" });
+      }
+      requestCharging() {
+        return send({ cmd: "system.read", metric: "charging" });
+      }
+      // Reporters return the last value received from the hub (updated by the commands above).
       getBatteryLevel() {
         return sysCache.battery;
       }

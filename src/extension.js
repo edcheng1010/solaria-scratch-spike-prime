@@ -55,11 +55,9 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   let leftPort = "E", rightPort = "F";   // movement pair (set by setMovementPair)
   let tempo = 120;                        // music tempo (client-side)
 
-  // System metric cache — populated by subscriptions started at connect time.
+  // System metric cache — updated by routeSSP whenever a system event arrives.
+  // Reporters return this synchronously; command blocks trigger a fresh read.
   const sysCache = { battery: 0, temperature: 0, charging: false };
-
-  // Tracks which button subscriptions are active so the hat can auto-subscribe.
-  const btnSubscribed = { Left: false, Right: false };
 
   // Edge-trigger flags for hat blocks (set by the subscription event handler)
   const flags = {
@@ -76,22 +74,16 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   function onClientEvent(ev) {
     if (ev.type === "connected") {
       flags.hubConnected = true;
-      // Subscribe to system metrics at connect time so reporters return live values
-      // without a round-trip. Use a 5-second interval (battery/temp don't change fast).
-      send({ cmd: "system.subscribe", metric: "battery",     interval: 5000 });
-      send({ cmd: "system.subscribe", metric: "temperature", interval: 5000 });
-      send({ cmd: "system.subscribe", metric: "charging",    interval: 5000 });
     } else if (ev.type === "disconnected") {
       flags.hubDisconnected = true;
-      btnSubscribed.Left  = false;
-      btnSubscribed.Right = false;
       client = null;
     } else if (ev.type === "ssp") {
       routeSSP(ev.event);
     }
   }
 
-  // Routes subscription-driven events into caches and edge-trigger flags.
+  // Routes inbound SSP events into caches and edge-trigger flags.
+  // Mirrors the App Inventor onHubData dispatch pattern across all components.
   function routeSSP(ev) {
     if (!ev) return;
     if (ev.event === "sensor") {
@@ -99,11 +91,14 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
       if (ev.type === "distance") flags.distanceChanged[ev.port] = true;
     } else if (ev.event === "system") {
       const m = ev.metric;
-      // System metric cache (populated by subscriptions started on connect).
-      if (m === "battery")     { sysCache.battery     = ev.value ?? 0;     return; }
-      if (m === "temperature") { sysCache.temperature = ev.value ?? 0;     return; }
-      if (m === "charging")    { sysCache.charging    = !!ev.value;        return; }
-      // Button subscriptions emit metric "button.left"/"button.right".
+      // Cache system metric responses (mirrors LegoSpikeSystem.onHubData).
+      // These arrive in response to the requestBattery / requestTemperature /
+      // requestCharging command blocks (fire-and-forget, no blocking return value).
+      if (m === "battery")     { sysCache.battery     = ev.value ?? 0;  return; }
+      if (m === "temperature") { sysCache.temperature = ev.value ?? 0;  return; }
+      if (m === "charging")    { sysCache.charging    = !!ev.value;     return; }
+      // Button events arrive after SubscribeToHub[Left|Right]Button command
+      // (mirrors LegoSpikeSensors.SubscribeToHubLeftButton / RightButton).
       if (m === "button.left" || m === "button.right") {
         const btn = m === "button.left" ? "Left" : "Right";
         const pressed = ev.value === "pressed";
@@ -360,9 +355,16 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
 
           "---",
           { blockType: BlockType.LABEL, text: "System" },
+          // Command blocks trigger a one-shot read (mirrors GetBatteryLevel / GetTemperature /
+          // IsCharging in LegoSpikeSystem). The hub responds asynchronously; routeSSP caches
+          // the value so the reporters below return it on the next Scratch tick.
+          { opcode: "requestBatteryLevel", blockType: BlockType.COMMAND, text: "get hub battery level" },
+          { opcode: "requestTemperature",  blockType: BlockType.COMMAND, text: "get hub temperature" },
+          { opcode: "requestCharging",     blockType: BlockType.COMMAND, text: "get hub charging state" },
+          // Reporters return the last cached value (updated by the commands above).
           { opcode: "getBatteryLevel", blockType: BlockType.REPORTER, text: "hub battery (%)" },
-          { opcode: "getTemperature", blockType: BlockType.REPORTER, text: "hub temperature (°C)" },
-          { opcode: "isCharging", blockType: BlockType.BOOLEAN, text: "hub charging?" },
+          { opcode: "getTemperature",  blockType: BlockType.REPORTER, text: "hub temperature (°C)" },
+          { opcode: "isCharging",      blockType: BlockType.BOOLEAN,  text: "hub charging?" },
 
           "---",
           { blockType: BlockType.LABEL, text: "Music" },
@@ -562,20 +564,11 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     whenColorRead({ PORT })    { const v = !!flags.colorChanged[PORT];    flags.colorChanged[PORT]    = false; return v; }
     whenDistanceRead({ PORT }) { const v = !!flags.distanceChanged[PORT]; flags.distanceChanged[PORT] = false; return v; }
     whenHubButtonPressed({ BUTTON }) {
-      // Auto-subscribe on first poll so the user doesn't need a separate subscribe block.
-      if (client && !btnSubscribed[BUTTON]) {
-        btnSubscribed[BUTTON] = true;
-        send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
-      }
       const v = !!flags.buttonPressed[BUTTON];
       flags.buttonPressed[BUTTON] = false;
       return v;
     }
     whenHubButtonReleased({ BUTTON }) {
-      if (client && !btnSubscribed[BUTTON]) {
-        btnSubscribed[BUTTON] = true;
-        send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
-      }
       const v = !!flags.buttonReleased[BUTTON];
       flags.buttonReleased[BUTTON] = false;
       return v;
@@ -583,8 +576,8 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
 
     subscribeToColor({ PORT })    { return send({ cmd: "sensor.subscribe", port: PORT, type: "color",    mode: "on_change" }); }
     subscribeToDistance({ PORT }) { return send({ cmd: "sensor.subscribe", port: PORT, type: "distance", mode: "on_change" }); }
+    // Mirrors SubscribeToHubLeftButton / SubscribeToHubRightButton in LegoSpikeSensors.
     subscribeToHubButton({ BUTTON }) {
-      btnSubscribed[BUTTON] = true;
       return send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
     }
 
@@ -604,8 +597,12 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     }
 
     // ── System ──────────────────────────────────────────────────────────────────────
-    // These reporters return the cached value (populated by system.subscribe started at connect).
-    // First call after connect may return 0 until the first subscription event arrives (~5 s).
+    // Command blocks (fire-and-forget, mirror GetBatteryLevel/GetTemperature/IsCharging
+    // in LegoSpikeSystem). Hub responds asynchronously; routeSSP caches the value.
+    requestBatteryLevel() { return send({ cmd: "system.read", metric: "battery" }); }
+    requestTemperature()  { return send({ cmd: "system.read", metric: "temperature" }); }
+    requestCharging()     { return send({ cmd: "system.read", metric: "charging" }); }
+    // Reporters return the last value received from the hub (updated by the commands above).
     getBatteryLevel()  { return sysCache.battery; }
     getTemperature()   { return sysCache.temperature; }
     isCharging()       { return sysCache.charging; }
