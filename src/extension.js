@@ -55,6 +55,12 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   let leftPort = "E", rightPort = "F";   // movement pair (set by setMovementPair)
   let tempo = 120;                        // music tempo (client-side)
 
+  // System metric cache — populated by subscriptions started at connect time.
+  const sysCache = { battery: 0, temperature: 0, charging: false };
+
+  // Tracks which button subscriptions are active so the hat can auto-subscribe.
+  const btnSubscribed = { Left: false, Right: false };
+
   // Edge-trigger flags for hat blocks (set by the subscription event handler)
   const flags = {
     hubConnected: false,
@@ -70,24 +76,36 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   function onClientEvent(ev) {
     if (ev.type === "connected") {
       flags.hubConnected = true;
+      // Subscribe to system metrics at connect time so reporters return live values
+      // without a round-trip. Use a 5-second interval (battery/temp don't change fast).
+      send({ cmd: "system.subscribe", metric: "battery",     interval: 5000 });
+      send({ cmd: "system.subscribe", metric: "temperature", interval: 5000 });
+      send({ cmd: "system.subscribe", metric: "charging",    interval: 5000 });
     } else if (ev.type === "disconnected") {
       flags.hubDisconnected = true;
+      btnSubscribed.Left  = false;
+      btnSubscribed.Right = false;
       client = null;
     } else if (ev.type === "ssp") {
       routeSSP(ev.event);
     }
   }
 
-  // Subscription-driven state (one-shot reads are handled by requestEvent, not here).
+  // Routes subscription-driven events into caches and edge-trigger flags.
   function routeSSP(ev) {
     if (!ev) return;
     if (ev.event === "sensor") {
       if (ev.type === "color")    flags.colorChanged[ev.port] = true;
       if (ev.type === "distance") flags.distanceChanged[ev.port] = true;
     } else if (ev.event === "system") {
-      // Button subscriptions emit metric "button.left"/"button.right", value "pressed"/"released".
-      if (ev.metric === "button.left" || ev.metric === "button.right") {
-        const btn = ev.metric === "button.left" ? "Left" : "Right";
+      const m = ev.metric;
+      // System metric cache (populated by subscriptions started on connect).
+      if (m === "battery")     { sysCache.battery     = ev.value ?? 0;     return; }
+      if (m === "temperature") { sysCache.temperature = ev.value ?? 0;     return; }
+      if (m === "charging")    { sysCache.charging    = !!ev.value;        return; }
+      // Button subscriptions emit metric "button.left"/"button.right".
+      if (m === "button.left" || m === "button.right") {
+        const btn = m === "button.left" ? "Left" : "Right";
         const pressed = ev.value === "pressed";
         const was = buttonState[btn];
         buttonState[btn] = pressed;
@@ -543,12 +561,30 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
 
     whenColorRead({ PORT })    { const v = !!flags.colorChanged[PORT];    flags.colorChanged[PORT]    = false; return v; }
     whenDistanceRead({ PORT }) { const v = !!flags.distanceChanged[PORT]; flags.distanceChanged[PORT] = false; return v; }
-    whenHubButtonPressed({ BUTTON })  { const v = !!flags.buttonPressed[BUTTON];  flags.buttonPressed[BUTTON]  = false; return v; }
-    whenHubButtonReleased({ BUTTON }) { const v = !!flags.buttonReleased[BUTTON]; flags.buttonReleased[BUTTON] = false; return v; }
+    whenHubButtonPressed({ BUTTON }) {
+      // Auto-subscribe on first poll so the user doesn't need a separate subscribe block.
+      if (client && !btnSubscribed[BUTTON]) {
+        btnSubscribed[BUTTON] = true;
+        send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
+      }
+      const v = !!flags.buttonPressed[BUTTON];
+      flags.buttonPressed[BUTTON] = false;
+      return v;
+    }
+    whenHubButtonReleased({ BUTTON }) {
+      if (client && !btnSubscribed[BUTTON]) {
+        btnSubscribed[BUTTON] = true;
+        send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
+      }
+      const v = !!flags.buttonReleased[BUTTON];
+      flags.buttonReleased[BUTTON] = false;
+      return v;
+    }
 
     subscribeToColor({ PORT })    { return send({ cmd: "sensor.subscribe", port: PORT, type: "color",    mode: "on_change" }); }
     subscribeToDistance({ PORT }) { return send({ cmd: "sensor.subscribe", port: PORT, type: "distance", mode: "on_change" }); }
     subscribeToHubButton({ BUTTON }) {
+      btnSubscribed[BUTTON] = true;
       return send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
     }
 
@@ -568,18 +604,11 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     }
 
     // ── System ──────────────────────────────────────────────────────────────────────
-    async getBatteryLevel() {
-      const ev = await requestEvent({ cmd: "system.read", metric: "battery" }, systemMatch("battery"));
-      return ev ? ev.value : 0;
-    }
-    async getTemperature() {
-      const ev = await requestEvent({ cmd: "system.read", metric: "temperature" }, systemMatch("temperature"));
-      return ev ? ev.value : 0;
-    }
-    async isCharging() {
-      const ev = await requestEvent({ cmd: "system.read", metric: "charging" }, systemMatch("charging"));
-      return !!(ev && ev.value);
-    }
+    // These reporters return the cached value (populated by system.subscribe started at connect).
+    // First call after connect may return 0 until the first subscription event arrives (~5 s).
+    getBatteryLevel()  { return sysCache.battery; }
+    getTemperature()   { return sysCache.temperature; }
+    isCharging()       { return sysCache.charging; }
 
     // ── Music (client-side tempo; await duration so notes sequence in Scratch) ───────
     async playNoteForBeats({ NOTE, BEATS }) {

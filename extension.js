@@ -435,6 +435,7 @@
         filters: [{ services: [SERVICE_UUID] }]
       });
       const gatt = await dev.gatt.connect();
+      this.gatt = gatt;
       const svc = await gatt.getPrimaryService(SERVICE_UUID);
       this.rx = await svc.getCharacteristic(RX_UUID);
       this.tx = await svc.getCharacteristic(TX_UUID);
@@ -446,6 +447,14 @@
       });
     }
     async disconnect() {
+      var _a;
+      try {
+        (_a = this.gatt) == null ? void 0 : _a.disconnect();
+      } catch {
+      }
+      this.gatt = void 0;
+      this.rx = void 0;
+      this.tx = void 0;
     }
     async write(framed) {
       if (!this.rx) throw new Error("not connected");
@@ -1931,6 +1940,8 @@ if __name__ == '__main__':\r
     let client = null;
     let leftPort = "E", rightPort = "F";
     let tempo = 120;
+    const sysCache = { battery: 0, temperature: 0, charging: false };
+    const btnSubscribed = { Left: false, Right: false };
     const flags = {
       hubConnected: false,
       hubDisconnected: false,
@@ -1945,8 +1956,13 @@ if __name__ == '__main__':\r
     function onClientEvent(ev) {
       if (ev.type === "connected") {
         flags.hubConnected = true;
+        send({ cmd: "system.subscribe", metric: "battery", interval: 5e3 });
+        send({ cmd: "system.subscribe", metric: "temperature", interval: 5e3 });
+        send({ cmd: "system.subscribe", metric: "charging", interval: 5e3 });
       } else if (ev.type === "disconnected") {
         flags.hubDisconnected = true;
+        btnSubscribed.Left = false;
+        btnSubscribed.Right = false;
         client = null;
       } else if (ev.type === "ssp") {
         routeSSP(ev.event);
@@ -1958,8 +1974,21 @@ if __name__ == '__main__':\r
         if (ev.type === "color") flags.colorChanged[ev.port] = true;
         if (ev.type === "distance") flags.distanceChanged[ev.port] = true;
       } else if (ev.event === "system") {
-        if (ev.metric === "button.left" || ev.metric === "button.right") {
-          const btn = ev.metric === "button.left" ? "Left" : "Right";
+        const m = ev.metric;
+        if (m === "battery") {
+          sysCache.battery = ev.value ?? 0;
+          return;
+        }
+        if (m === "temperature") {
+          sysCache.temperature = ev.value ?? 0;
+          return;
+        }
+        if (m === "charging") {
+          sysCache.charging = !!ev.value;
+          return;
+        }
+        if (m === "button.left" || m === "button.right") {
+          const btn = m === "button.left" ? "Left" : "Right";
           const pressed = ev.value === "pressed";
           const was = buttonState[btn];
           buttonState[btn] = pressed;
@@ -2660,11 +2689,19 @@ if __name__ == '__main__':\r
         return v;
       }
       whenHubButtonPressed({ BUTTON }) {
+        if (client && !btnSubscribed[BUTTON]) {
+          btnSubscribed[BUTTON] = true;
+          send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
+        }
         const v = !!flags.buttonPressed[BUTTON];
         flags.buttonPressed[BUTTON] = false;
         return v;
       }
       whenHubButtonReleased({ BUTTON }) {
+        if (client && !btnSubscribed[BUTTON]) {
+          btnSubscribed[BUTTON] = true;
+          send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
+        }
         const v = !!flags.buttonReleased[BUTTON];
         flags.buttonReleased[BUTTON] = false;
         return v;
@@ -2676,6 +2713,7 @@ if __name__ == '__main__':\r
         return send({ cmd: "sensor.subscribe", port: PORT, type: "distance", mode: "on_change" });
       }
       subscribeToHubButton({ BUTTON }) {
+        btnSubscribed[BUTTON] = true;
         return send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
       }
       // ── Sound ──────────────────────────────────────────────────────────────────────
@@ -2699,17 +2737,16 @@ if __name__ == '__main__':\r
         return ev ? ev.value : 0;
       }
       // ── System ──────────────────────────────────────────────────────────────────────
-      async getBatteryLevel() {
-        const ev = await requestEvent({ cmd: "system.read", metric: "battery" }, systemMatch("battery"));
-        return ev ? ev.value : 0;
+      // These reporters return the cached value (populated by system.subscribe started at connect).
+      // First call after connect may return 0 until the first subscription event arrives (~5 s).
+      getBatteryLevel() {
+        return sysCache.battery;
       }
-      async getTemperature() {
-        const ev = await requestEvent({ cmd: "system.read", metric: "temperature" }, systemMatch("temperature"));
-        return ev ? ev.value : 0;
+      getTemperature() {
+        return sysCache.temperature;
       }
-      async isCharging() {
-        const ev = await requestEvent({ cmd: "system.read", metric: "charging" }, systemMatch("charging"));
-        return !!(ev && ev.value);
+      isCharging() {
+        return sysCache.charging;
       }
       // ── Music (client-side tempo; await duration so notes sequence in Scratch) ───────
       async playNoteForBeats({ NOTE, BEATS }) {
