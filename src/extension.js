@@ -31,6 +31,7 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
                         "ARROWNORTH", "ARROWEAST", "ARROWSOUTH", "ARROWWEST"];
   const MOTOR_MODES       = ["speed", "power"];
   const MOVEMENT_DIRS     = ["forward", "backward"];
+  const MATRIX_ANGLES     = ["0", "90", "180", "270"];
 
   const NOTES       = [
     "C3","Csharp3","D3","Dsharp3","E3","F3","Fsharp3","G3","Gsharp3","A3","Asharp3","B3",
@@ -362,13 +363,24 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
 
           "---",
           { blockType: BlockType.LABEL, text: "Light" },
+
+          // Matrix display — mirrors TurnOnLightMatrix / TurnOnLightMatrixForSeconds /
+          // TurnOffLightMatrix / WriteOnLightMatrix in LegoSpikeLight.
           { opcode: "showImage", blockType: BlockType.COMMAND,
             text: "show image [IMAGE]",
             arguments: { IMAGE: { type: ArgumentType.STRING, menu: "images", defaultValue: "HAPPY" } } },
+          { opcode: "showImageForSeconds", blockType: BlockType.COMMAND,
+            text: "show image [IMAGE] for [SECS] seconds",
+            arguments: {
+              IMAGE: { type: ArgumentType.STRING, menu: "images", defaultValue: "HAPPY" },
+              SECS:  { type: ArgumentType.NUMBER, defaultValue: 2 } } },
           { opcode: "clearLightMatrix", blockType: BlockType.COMMAND, text: "turn off light matrix" },
           { opcode: "writeOnLightMatrix", blockType: BlockType.COMMAND,
             text: "write [TEXT] on light matrix",
             arguments: { TEXT: { type: ArgumentType.STRING, defaultValue: "Hi" } } },
+
+          // Pixel & brightness / orientation — mirrors SetPixelBrightness / SetLightMatrixBrightness /
+          // RotateLightMatrix / SetLightMatrixOrientation in LegoSpikeLight.
           { opcode: "setPixel", blockType: BlockType.COMMAND,
             text: "set pixel col [X] row [Y] to brightness [B] %",
             arguments: {
@@ -378,17 +390,17 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "setLightMatrixBrightness", blockType: BlockType.COMMAND,
             text: "set light matrix brightness to [LEVEL] %",
             arguments: { LEVEL: { type: ArgumentType.NUMBER, defaultValue: 100 } } },
+          { opcode: "rotateLightMatrix", blockType: BlockType.COMMAND,
+            text: "rotate light matrix by [ANGLE]°",
+            arguments: { ANGLE: { type: ArgumentType.STRING, menu: "matrixAngles", defaultValue: "90" } } },
+          { opcode: "setLightMatrixOrientation", blockType: BlockType.COMMAND,
+            text: "set light matrix orientation to [ANGLE]°",
+            arguments: { ANGLE: { type: ArgumentType.STRING, menu: "matrixAngles", defaultValue: "0" } } },
+
+          // Center button — mirrors SetCenterButtonLight in LegoSpikeLight.
           { opcode: "setCenterButtonLight", blockType: BlockType.COMMAND,
             text: "set center button light to [COLOR]",
             arguments: { COLOR: { type: ArgumentType.STRING, menu: "btnColors", defaultValue: "azure" } } },
-          { opcode: "lightUpDistanceSensor", blockType: BlockType.COMMAND,
-            text: "light distance sensor [PORT] TL [TL] TR [TR] BL [BL] BR [BR]",
-            arguments: {
-              PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "B" },
-              TL: { type: ArgumentType.NUMBER, defaultValue: 100 },
-              TR: { type: ArgumentType.NUMBER, defaultValue: 100 },
-              BL: { type: ArgumentType.NUMBER, defaultValue: 100 },
-              BR: { type: ArgumentType.NUMBER, defaultValue: 100 } } },
 
           "---",
           { blockType: BlockType.LABEL, text: "Sensors" },
@@ -459,6 +471,17 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
             text: "subscribe to hub [BUTTON] button",
             arguments: { BUTTON: { type: ArgumentType.STRING, menu: "hubButtons", defaultValue: "Left" } } },
 
+          // Distance-sensor indicator LEDs — mirrors LightUpDistanceSensor in LegoSpikeSensors
+          // (filed under Sensors in App Inventor; uses the distance-sensor port). SSP §11 ext.
+          { opcode: "lightUpDistanceSensor", blockType: BlockType.COMMAND,
+            text: "light distance sensor [PORT] TL [TL] TR [TR] BL [BL] BR [BR]",
+            arguments: {
+              PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "B" },
+              TL: { type: ArgumentType.NUMBER, defaultValue: 100 },
+              TR: { type: ArgumentType.NUMBER, defaultValue: 100 },
+              BL: { type: ArgumentType.NUMBER, defaultValue: 100 },
+              BR: { type: ArgumentType.NUMBER, defaultValue: 100 } } },
+
           "---",
           { blockType: BlockType.LABEL, text: "Sound" },
           { opcode: "beep", blockType: BlockType.COMMAND,
@@ -518,8 +541,9 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           hubButtons:  { acceptReporters: true, items: menuOf(HUB_BUTTONS) },
           tiltDirs:    { acceptReporters: true, items: menuOf(TILT_DIRS) },
           tiltAxes:    { acceptReporters: true, items: menuOf(TILT_AXES) },
-          btnColors:   { acceptReporters: true, items: menuOf(BTN_COLORS) },
-          images:      { acceptReporters: true, items: menuOf(IMAGES) },
+          btnColors:    { acceptReporters: true, items: menuOf(BTN_COLORS) },
+          images:       { acceptReporters: true, items: menuOf(IMAGES) },
+          matrixAngles: { acceptReporters: false, items: menuOf(MATRIX_ANGLES) },
           notes:       { acceptReporters: true, items: menuOf(NOTES) },
           debugStates: { acceptReporters: false, items: menuOf(["on", "off"]) },
         },
@@ -673,15 +697,22 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     }
 
     // ── Light ──────────────────────────────────────────────────────────────────────
+    // Matrix display
     showImage({ IMAGE }) {
       return send({ cmd: "led.matrix.image", port: "display", image: Cast.toString(IMAGE).toUpperCase() });
+    }
+    async showImageForSeconds({ IMAGE, SECS }) {
+      await send({ cmd: "led.matrix.image", port: "display", image: Cast.toString(IMAGE).toUpperCase() });
+      await waitMs(Cast.toNumber(SECS) * 1000);
+      await send({ cmd: "led.matrix.clear", port: "display" });
     }
     clearLightMatrix() { return send({ cmd: "led.matrix.clear", port: "display" }); }
     writeOnLightMatrix({ TEXT }) {
       return send({ cmd: "led.matrix.text", port: "display", text: Cast.toString(TEXT) });
     }
+    // Pixel & brightness / orientation
     setPixel({ X, Y, B }) {
-      // Blocks use 1–5 (col/row); hub expects 0–4.
+      // Block input 1–5 (col/row); hub expects 0–4.
       return send({ cmd: "led.matrix.pixel", port: "display",
         x: Math.max(1, Math.min(5, Cast.toNumber(X))) - 1,
         y: Math.max(1, Math.min(5, Cast.toNumber(Y))) - 1,
@@ -691,12 +722,15 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
       return send({ cmd: "led.matrix.brightness", port: "display",
         level: Math.max(0, Math.min(100, Cast.toNumber(LEVEL))) });
     }
+    rotateLightMatrix({ ANGLE }) {
+      return send({ cmd: "led.matrix.rotate", port: "display", degrees: Cast.toNumber(ANGLE) });
+    }
+    setLightMatrixOrientation({ ANGLE }) {
+      return send({ cmd: "led.matrix.orientation", port: "display", rotation: Cast.toNumber(ANGLE) });
+    }
+    // Center button
     setCenterButtonLight({ COLOR }) {
       return send({ cmd: "led.set", port: "status", color: Cast.toString(COLOR) });
-    }
-    lightUpDistanceSensor({ PORT, TL, TR, BL, BR }) {
-      const c = (v) => Math.max(0, Math.min(100, Cast.toNumber(v)));
-      return send({ cmd: "led.distance", port: PORT, tl: c(TL), tr: c(TR), bl: c(BL), br: c(BR) });
     }
 
     // ── Sensors (reporters & booleans use one-shot request/response) ────────────────
@@ -777,6 +811,11 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     // Mirrors SubscribeToHubLeftButton / SubscribeToHubRightButton in LegoSpikeSensors.
     subscribeToHubButton({ BUTTON }) {
       return send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
+    }
+    // Distance-sensor indicator LEDs (relocated from Light; mirrors LightUpDistanceSensor in LegoSpikeSensors)
+    lightUpDistanceSensor({ PORT, TL, TR, BL, BR }) {
+      const c = (v) => Math.max(0, Math.min(100, Cast.toNumber(v)));
+      return send({ cmd: "led.distance", port: PORT, tl: c(TL), tr: c(TR), bl: c(BL), br: c(BR) });
     }
 
     // ── Sound ──────────────────────────────────────────────────────────────────────

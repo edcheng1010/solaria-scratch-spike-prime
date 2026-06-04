@@ -1906,6 +1906,7 @@ if __name__ == '__main__':\r
     ];
     const MOTOR_MODES = ["speed", "power"];
     const MOVEMENT_DIRS = ["forward", "backward"];
+    const MATRIX_ANGLES = ["0", "90", "180", "270"];
     const NOTES = [
       "C3",
       "Csharp3",
@@ -2324,11 +2325,22 @@ if __name__ == '__main__':\r
             },
             "---",
             { blockType: BlockType.LABEL, text: "Light" },
+            // Matrix display — mirrors TurnOnLightMatrix / TurnOnLightMatrixForSeconds /
+            // TurnOffLightMatrix / WriteOnLightMatrix in LegoSpikeLight.
             {
               opcode: "showImage",
               blockType: BlockType.COMMAND,
               text: "show image [IMAGE]",
               arguments: { IMAGE: { type: ArgumentType.STRING, menu: "images", defaultValue: "HAPPY" } }
+            },
+            {
+              opcode: "showImageForSeconds",
+              blockType: BlockType.COMMAND,
+              text: "show image [IMAGE] for [SECS] seconds",
+              arguments: {
+                IMAGE: { type: ArgumentType.STRING, menu: "images", defaultValue: "HAPPY" },
+                SECS: { type: ArgumentType.NUMBER, defaultValue: 2 }
+              }
             },
             { opcode: "clearLightMatrix", blockType: BlockType.COMMAND, text: "turn off light matrix" },
             {
@@ -2337,6 +2349,8 @@ if __name__ == '__main__':\r
               text: "write [TEXT] on light matrix",
               arguments: { TEXT: { type: ArgumentType.STRING, defaultValue: "Hi" } }
             },
+            // Pixel & brightness / orientation — mirrors SetPixelBrightness / SetLightMatrixBrightness /
+            // RotateLightMatrix / SetLightMatrixOrientation in LegoSpikeLight.
             {
               opcode: "setPixel",
               blockType: BlockType.COMMAND,
@@ -2354,22 +2368,23 @@ if __name__ == '__main__':\r
               arguments: { LEVEL: { type: ArgumentType.NUMBER, defaultValue: 100 } }
             },
             {
+              opcode: "rotateLightMatrix",
+              blockType: BlockType.COMMAND,
+              text: "rotate light matrix by [ANGLE]\xB0",
+              arguments: { ANGLE: { type: ArgumentType.STRING, menu: "matrixAngles", defaultValue: "90" } }
+            },
+            {
+              opcode: "setLightMatrixOrientation",
+              blockType: BlockType.COMMAND,
+              text: "set light matrix orientation to [ANGLE]\xB0",
+              arguments: { ANGLE: { type: ArgumentType.STRING, menu: "matrixAngles", defaultValue: "0" } }
+            },
+            // Center button — mirrors SetCenterButtonLight in LegoSpikeLight.
+            {
               opcode: "setCenterButtonLight",
               blockType: BlockType.COMMAND,
               text: "set center button light to [COLOR]",
               arguments: { COLOR: { type: ArgumentType.STRING, menu: "btnColors", defaultValue: "azure" } }
-            },
-            {
-              opcode: "lightUpDistanceSensor",
-              blockType: BlockType.COMMAND,
-              text: "light distance sensor [PORT] TL [TL] TR [TR] BL [BL] BR [BR]",
-              arguments: {
-                PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "B" },
-                TL: { type: ArgumentType.NUMBER, defaultValue: 100 },
-                TR: { type: ArgumentType.NUMBER, defaultValue: 100 },
-                BL: { type: ArgumentType.NUMBER, defaultValue: 100 },
-                BR: { type: ArgumentType.NUMBER, defaultValue: 100 }
-              }
             },
             "---",
             { blockType: BlockType.LABEL, text: "Sensors" },
@@ -2503,6 +2518,20 @@ if __name__ == '__main__':\r
               text: "subscribe to hub [BUTTON] button",
               arguments: { BUTTON: { type: ArgumentType.STRING, menu: "hubButtons", defaultValue: "Left" } }
             },
+            // Distance-sensor indicator LEDs — mirrors LightUpDistanceSensor in LegoSpikeSensors
+            // (filed under Sensors in App Inventor; uses the distance-sensor port). SSP §11 ext.
+            {
+              opcode: "lightUpDistanceSensor",
+              blockType: BlockType.COMMAND,
+              text: "light distance sensor [PORT] TL [TL] TR [TR] BL [BL] BR [BR]",
+              arguments: {
+                PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "B" },
+                TL: { type: ArgumentType.NUMBER, defaultValue: 100 },
+                TR: { type: ArgumentType.NUMBER, defaultValue: 100 },
+                BL: { type: ArgumentType.NUMBER, defaultValue: 100 },
+                BR: { type: ArgumentType.NUMBER, defaultValue: 100 }
+              }
+            },
             "---",
             { blockType: BlockType.LABEL, text: "Sound" },
             {
@@ -2584,6 +2613,7 @@ if __name__ == '__main__':\r
             tiltAxes: { acceptReporters: true, items: menuOf(TILT_AXES) },
             btnColors: { acceptReporters: true, items: menuOf(BTN_COLORS) },
             images: { acceptReporters: true, items: menuOf(IMAGES) },
+            matrixAngles: { acceptReporters: false, items: menuOf(MATRIX_ANGLES) },
             notes: { acceptReporters: true, items: menuOf(NOTES) },
             debugStates: { acceptReporters: false, items: menuOf(["on", "off"]) }
           }
@@ -2826,8 +2856,14 @@ if __name__ == '__main__':\r
         });
       }
       // ── Light ──────────────────────────────────────────────────────────────────────
+      // Matrix display
       showImage({ IMAGE }) {
         return send({ cmd: "led.matrix.image", port: "display", image: Cast.toString(IMAGE).toUpperCase() });
+      }
+      async showImageForSeconds({ IMAGE, SECS }) {
+        await send({ cmd: "led.matrix.image", port: "display", image: Cast.toString(IMAGE).toUpperCase() });
+        await waitMs(Cast.toNumber(SECS) * 1e3);
+        await send({ cmd: "led.matrix.clear", port: "display" });
       }
       clearLightMatrix() {
         return send({ cmd: "led.matrix.clear", port: "display" });
@@ -2835,6 +2871,7 @@ if __name__ == '__main__':\r
       writeOnLightMatrix({ TEXT }) {
         return send({ cmd: "led.matrix.text", port: "display", text: Cast.toString(TEXT) });
       }
+      // Pixel & brightness / orientation
       setPixel({ X, Y, B }) {
         return send({
           cmd: "led.matrix.pixel",
@@ -2851,12 +2888,15 @@ if __name__ == '__main__':\r
           level: Math.max(0, Math.min(100, Cast.toNumber(LEVEL)))
         });
       }
+      rotateLightMatrix({ ANGLE }) {
+        return send({ cmd: "led.matrix.rotate", port: "display", degrees: Cast.toNumber(ANGLE) });
+      }
+      setLightMatrixOrientation({ ANGLE }) {
+        return send({ cmd: "led.matrix.orientation", port: "display", rotation: Cast.toNumber(ANGLE) });
+      }
+      // Center button
       setCenterButtonLight({ COLOR }) {
         return send({ cmd: "led.set", port: "status", color: Cast.toString(COLOR) });
-      }
-      lightUpDistanceSensor({ PORT, TL, TR, BL, BR }) {
-        const c = (v) => Math.max(0, Math.min(100, Cast.toNumber(v)));
-        return send({ cmd: "led.distance", port: PORT, tl: c(TL), tr: c(TR), bl: c(BL), br: c(BR) });
       }
       // ── Sensors (reporters & booleans use one-shot request/response) ────────────────
       color({ PORT }) {
@@ -2967,6 +3007,11 @@ if __name__ == '__main__':\r
       // Mirrors SubscribeToHubLeftButton / SubscribeToHubRightButton in LegoSpikeSensors.
       subscribeToHubButton({ BUTTON }) {
         return send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
+      }
+      // Distance-sensor indicator LEDs (relocated from Light; mirrors LightUpDistanceSensor in LegoSpikeSensors)
+      lightUpDistanceSensor({ PORT, TL, TR, BL, BR }) {
+        const c = (v) => Math.max(0, Math.min(100, Cast.toNumber(v)));
+        return send({ cmd: "led.distance", port: PORT, tl: c(TL), tr: c(TR), bl: c(BL), br: c(BR) });
       }
       // ── Sound ──────────────────────────────────────────────────────────────────────
       beep({ FREQ, DUR }) {
