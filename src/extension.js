@@ -29,7 +29,8 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   const IMAGES      = ["HAPPY", "SAD", "SMILE", "HEART", "HEARTSMALL", "CONFUSED", "ANGRY",
                         "ASLEEP", "SURPRISED", "YES", "NO",
                         "ARROWNORTH", "ARROWEAST", "ARROWSOUTH", "ARROWWEST"];
-  const MOTOR_MODES = ["speed", "power"];
+  const MOTOR_MODES       = ["speed", "power"];
+  const MOVEMENT_DIRS     = ["forward", "backward"];
 
   const NOTES       = [
     "C3","Csharp3","D3","Dsharp3","E3","F3","Fsharp3","G3","Gsharp3","A3","Asharp3","B3",
@@ -49,8 +50,12 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   });
 
   const menuOf = (arr) => arr.map((v) => ({ text: v, value: v }));
+  // Shared sign helper for direction dropdowns across Motors (clockwise/counterclockwise)
+  // and Movement (forward/backward). "negative" directions negate the magnitude.
   const signed = (dir, mag) =>
-    dir === "counterclockwise" ? -Math.abs(Cast.toNumber(mag)) : Math.abs(Cast.toNumber(mag));
+    (dir === "counterclockwise" || dir === "backward")
+      ? -Math.abs(Cast.toNumber(mag))
+      : Math.abs(Cast.toNumber(mag));
 
   // ─── State ──────────────────────────────────────────────────────────────────
   let client = null;
@@ -298,30 +303,59 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
 
           "---",
           { blockType: BlockType.LABEL, text: "Movement" },
+
+          // Drive (continuous) — mirrors StartMoving / StartMovingWithSteering /
+          // StartMovingAtSpeed (tank) / StopMoving in LegoSpikeMovement.
+          { opcode: "startMoving", blockType: BlockType.COMMAND,
+            text: "start moving [DIRECTION] at [SPEED] %",
+            arguments: {
+              DIRECTION: { type: ArgumentType.STRING, menu: "movementDirs", defaultValue: "forward" },
+              SPEED:     { type: ArgumentType.NUMBER, defaultValue: 50 } } },
+          { opcode: "startMovingWithSteering", blockType: BlockType.COMMAND,
+            text: "start moving [DIRECTION] at [SPEED] % with steering [STEER]",
+            arguments: {
+              DIRECTION: { type: ArgumentType.STRING, menu: "movementDirs", defaultValue: "forward" },
+              SPEED:     { type: ArgumentType.NUMBER, defaultValue: 50 },
+              STEER:     { type: ArgumentType.NUMBER, defaultValue: 0 } } },
+          { opcode: "startMovingTank", blockType: BlockType.COMMAND,
+            text: "tank drive: left [LSPEED] % right [RSPEED] %",
+            arguments: {
+              LSPEED: { type: ArgumentType.NUMBER, defaultValue:  50 },
+              RSPEED: { type: ArgumentType.NUMBER, defaultValue:  50 } } },
+          { opcode: "stopMoving", blockType: BlockType.COMMAND,
+            text: "stop moving [ACTION]",
+            arguments: { ACTION: { type: ArgumentType.STRING, menu: "stopActions", defaultValue: "brake" } } },
+
+          // Drive (timed) — mirrors MoveForDuration / MoveWithSteeringForDuration.
+          // STEER default 0 = straight; steering range −100..+100.
+          { opcode: "moveForSeconds", blockType: BlockType.COMMAND,
+            text: "move [DIRECTION] at [SPEED] % steering [STEER] for [SECS] seconds",
+            arguments: {
+              DIRECTION: { type: ArgumentType.STRING, menu: "movementDirs", defaultValue: "forward" },
+              SPEED:     { type: ArgumentType.NUMBER, defaultValue: 50 },
+              STEER:     { type: ArgumentType.NUMBER, defaultValue: 0 },
+              SECS:      { type: ArgumentType.NUMBER, defaultValue: 2 } } },
+          { opcode: "moveForDegrees", blockType: BlockType.COMMAND,
+            text: "move [DIRECTION] at [SPEED] % steering [STEER] for [DEG] degrees",
+            arguments: {
+              DIRECTION: { type: ArgumentType.STRING, menu: "movementDirs", defaultValue: "forward" },
+              SPEED:     { type: ArgumentType.NUMBER, defaultValue: 50 },
+              STEER:     { type: ArgumentType.NUMBER, defaultValue: 0 },
+              DEG:       { type: ArgumentType.NUMBER, defaultValue: 360 } } },
+          { opcode: "moveForRotations", blockType: BlockType.COMMAND,
+            text: "move [DIRECTION] at [SPEED] % steering [STEER] for [ROT] rotations",
+            arguments: {
+              DIRECTION: { type: ArgumentType.STRING, menu: "movementDirs", defaultValue: "forward" },
+              SPEED:     { type: ArgumentType.NUMBER, defaultValue: 50 },
+              STEER:     { type: ArgumentType.NUMBER, defaultValue: 0 },
+              ROT:       { type: ArgumentType.NUMBER, defaultValue: 1 } } },
+
+          // Configuration — mirrors SetMovementPair / SetMovementAcceleration.
           { opcode: "setMovementPair", blockType: BlockType.COMMAND,
             text: "set movement motors [LEFT] (left) [RIGHT] (right)",
             arguments: {
               LEFT:  { type: ArgumentType.STRING, menu: "ports", defaultValue: "E" },
               RIGHT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "F" } } },
-          { opcode: "startMoving", blockType: BlockType.COMMAND,
-            text: "start moving at [SPEED] %",
-            arguments: { SPEED: { type: ArgumentType.NUMBER, defaultValue: 50 } } },
-          { opcode: "startMovingWithSteering", blockType: BlockType.COMMAND,
-            text: "start moving at [SPEED] % with steering [STEER]",
-            arguments: {
-              SPEED: { type: ArgumentType.NUMBER, defaultValue: 50 },
-              STEER: { type: ArgumentType.NUMBER, defaultValue: 0 } } },
-          { opcode: "stopMoving", blockType: BlockType.COMMAND, text: "stop moving" },
-          { opcode: "moveForDegrees", blockType: BlockType.COMMAND,
-            text: "move [DEG] degrees at [SPEED] %",
-            arguments: {
-              DEG:   { type: ArgumentType.NUMBER, defaultValue: 360 },
-              SPEED: { type: ArgumentType.NUMBER, defaultValue: 50 } } },
-          { opcode: "moveForRotations", blockType: BlockType.COMMAND,
-            text: "move [ROT] rotations at [SPEED] %",
-            arguments: {
-              ROT:   { type: ArgumentType.NUMBER, defaultValue: 1 },
-              SPEED: { type: ArgumentType.NUMBER, defaultValue: 50 } } },
           { opcode: "setMovementAcceleration", blockType: BlockType.COMMAND,
             text: "set movement acceleration to [RATE] ms",
             arguments: { RATE: { type: ArgumentType.NUMBER, defaultValue: 500 } } },
@@ -476,8 +510,9 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
         menus: {
           ports:       { acceptReporters: true, items: menuOf(PORTS) },
           directions:  { acceptReporters: true, items: menuOf(DIRECTIONS) },
-          motorModes:  { acceptReporters: false, items: menuOf(MOTOR_MODES) },
-          stopActions: { acceptReporters: true, items: menuOf(STOP_ACTS) },
+          motorModes:   { acceptReporters: false, items: menuOf(MOTOR_MODES) },
+          movementDirs: { acceptReporters: false, items: menuOf(MOVEMENT_DIRS) },
+          stopActions:  { acceptReporters: true,  items: menuOf(STOP_ACTS) },
           colors:      { acceptReporters: true, items: menuOf(COLORS) },
           hubFaces:    { acceptReporters: true, items: menuOf(HUB_FACES) },
           hubButtons:  { acceptReporters: true, items: menuOf(HUB_BUTTONS) },
@@ -590,28 +625,47 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     motorSpeed({ PORT })            { return readSensor(PORT, "speed", 0); }
 
     // ── Movement ──────────────────────────────────────────────────────────────────
+    // Drive (continuous)
+    startMoving({ DIRECTION, SPEED }) {
+      return send({ cmd: "movement.drive", left: leftPort, right: rightPort,
+        speed: signed(DIRECTION, SPEED), steering: 0 });
+    }
+    startMovingWithSteering({ DIRECTION, SPEED, STEER }) {
+      return send({ cmd: "movement.drive", left: leftPort, right: rightPort,
+        speed: signed(DIRECTION, SPEED),
+        steering: Math.max(-100, Math.min(100, Cast.toNumber(STEER))) });
+    }
+    startMovingTank({ LSPEED, RSPEED }) {
+      return send({ cmd: "movement.drive", left: leftPort, right: rightPort,
+        left_speed:  Math.max(-100, Math.min(100, Cast.toNumber(LSPEED))),
+        right_speed: Math.max(-100, Math.min(100, Cast.toNumber(RSPEED))) });
+    }
+    stopMoving({ ACTION }) {
+      return send({ cmd: "movement.stop", stop_action: Cast.toString(ACTION) });
+    }
+    // Drive (timed) — all include steering (0 = straight)
+    moveForSeconds({ DIRECTION, SPEED, STEER, SECS }) {
+      return send({ cmd: "movement.drive", left: leftPort, right: rightPort,
+        speed: signed(DIRECTION, SPEED),
+        steering: Math.max(-100, Math.min(100, Cast.toNumber(STEER))),
+        duration: Math.round(Cast.toNumber(SECS) * 1000), duration_unit: "ms" });
+    }
+    moveForDegrees({ DIRECTION, SPEED, STEER, DEG }) {
+      return send({ cmd: "movement.drive", left: leftPort, right: rightPort,
+        speed: signed(DIRECTION, SPEED),
+        steering: Math.max(-100, Math.min(100, Cast.toNumber(STEER))),
+        duration: Cast.toNumber(DEG), duration_unit: "degrees" });
+    }
+    moveForRotations({ DIRECTION, SPEED, STEER, ROT }) {
+      return send({ cmd: "movement.drive", left: leftPort, right: rightPort,
+        speed: signed(DIRECTION, SPEED),
+        steering: Math.max(-100, Math.min(100, Cast.toNumber(STEER))),
+        duration: Cast.toNumber(ROT), duration_unit: "rotations" });
+    }
+    // Configuration
     setMovementPair({ LEFT, RIGHT }) {
       leftPort = LEFT; rightPort = RIGHT;
       return send({ cmd: "movement.configure", left: LEFT, right: RIGHT });
-    }
-    startMoving({ SPEED }) {
-      return send({ cmd: "movement.drive", left: leftPort, right: rightPort,
-        speed: Cast.toNumber(SPEED), steering: 0 });
-    }
-    startMovingWithSteering({ SPEED, STEER }) {
-      return send({ cmd: "movement.drive", left: leftPort, right: rightPort,
-        speed: Cast.toNumber(SPEED), steering: Math.max(-100, Math.min(100, Cast.toNumber(STEER))) });
-    }
-    stopMoving() { return send({ cmd: "movement.stop", stop_action: "brake" }); }
-    moveForDegrees({ DEG, SPEED }) {
-      return send({ cmd: "movement.drive", left: leftPort, right: rightPort,
-        speed: Cast.toNumber(SPEED), steering: 0,
-        duration: Cast.toNumber(DEG), duration_unit: "degrees" });
-    }
-    moveForRotations({ ROT, SPEED }) {
-      return send({ cmd: "movement.drive", left: leftPort, right: rightPort,
-        speed: Cast.toNumber(SPEED), steering: 0,
-        duration: Cast.toNumber(ROT), duration_unit: "rotations" });
     }
     setMovementAcceleration({ RATE }) {
       return send({ cmd: "movement.set_acceleration",
