@@ -63,6 +63,7 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   // ─── State ──────────────────────────────────────────────────────────────────
   let client = null;
   let leftPort = "E", rightPort = "F";   // movement pair (set by setMovementPair)
+  let wheelCircumference = 17.6;         // cm per wheel rotation (default ≈56 mm wheel; set via setWheelCircumference)
   let tempo = 120;                        // music tempo (client-side)
 
   // Connection state (mirrors App Inventor LegoSpikeConnectivity properties)
@@ -363,7 +364,17 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
               STEER:     { type: ArgumentType.NUMBER, defaultValue: 0 },
               ROT:       { type: ArgumentType.NUMBER, defaultValue: 1 } } },
 
-          // Configuration — mirrors SetMovementPair / SetMovementAcceleration.
+          // Drive (cm) — mirrors MoveForDistance (new in App Inventor; also matches LEGO SPIKE app).
+          // Converts cm → degrees client-side using wheelCircumference; wire stays duration_unit=degrees.
+          { opcode: "moveForCm", blockType: BlockType.COMMAND,
+            text: "move [DIRECTION] at [SPEED] % steering [STEER] for [CM] cm",
+            arguments: {
+              DIRECTION: { type: ArgumentType.STRING, menu: "movementDirs", defaultValue: "forward" },
+              SPEED:     { type: ArgumentType.NUMBER, defaultValue: 50 },
+              STEER:     { type: ArgumentType.NUMBER, defaultValue: 0 },
+              CM:        { type: ArgumentType.NUMBER, defaultValue: 20 } } },
+
+          // Configuration — mirrors SetMovementPair / SetMovementAcceleration / SetMovementRotationDistance.
           { opcode: "setMovementPair", blockType: BlockType.COMMAND,
             text: "set movement motors [LEFT] (left) [RIGHT] (right)",
             arguments: {
@@ -372,6 +383,9 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "setMovementAcceleration", blockType: BlockType.COMMAND,
             text: "set movement acceleration to [RATE] ms",
             arguments: { RATE: { type: ArgumentType.NUMBER, defaultValue: 500 } } },
+          { opcode: "setWheelCircumference", blockType: BlockType.COMMAND,
+            text: "set wheel circumference to [CM] cm",
+            arguments: { CM: { type: ArgumentType.NUMBER, defaultValue: 17.6 } } },
 
           "---",
           { blockType: BlockType.LABEL, text: "Light" },
@@ -775,9 +789,19 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
       leftPort = LEFT; rightPort = RIGHT;
       return send({ cmd: "movement.configure", left: LEFT, right: RIGHT });
     }
+    moveForCm({ DIRECTION, SPEED, STEER, CM }) {
+      const degrees = Math.round((Cast.toNumber(CM) / wheelCircumference) * 360);
+      return send({ cmd: "movement.drive", left: leftPort, right: rightPort,
+        speed: signed(DIRECTION, SPEED),
+        steering: Math.max(-100, Math.min(100, Cast.toNumber(STEER))),
+        duration: degrees, duration_unit: "degrees" });
+    }
     setMovementAcceleration({ RATE }) {
       return send({ cmd: "movement.set_acceleration",
         rate: Math.max(0, Math.min(10000, Cast.toNumber(RATE))) });
+    }
+    setWheelCircumference({ CM }) {
+      wheelCircumference = Math.max(0.1, Cast.toNumber(CM));
     }
 
     // ── Light ──────────────────────────────────────────────────────────────────────
