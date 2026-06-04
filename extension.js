@@ -1907,6 +1907,8 @@ if __name__ == '__main__':\r
     const MOTOR_MODES = ["speed", "power"];
     const MOVEMENT_DIRS = ["forward", "backward"];
     const MATRIX_ANGLES = ["0", "90", "180", "270"];
+    const RGB_CHANNELS = ["R", "G", "B"];
+    const XYZ_AXES = ["X", "Y", "Z"];
     const NOTES = [
       "C3",
       "Csharp3",
@@ -1979,6 +1981,8 @@ if __name__ == '__main__':\r
     let errMessage = "";
     let errCode = 0;
     const sysCache = { battery: 0, temperature: 0, charging: false };
+    let lastGesture = "";
+    let lastFaceOrientation = "";
     const flags = {
       hubConnected: false,
       hubDisconnected: false,
@@ -1988,7 +1992,9 @@ if __name__ == '__main__':\r
       distanceChanged: {},
       // port → bool
       buttonPressed: { Left: false, Right: false },
-      buttonReleased: { Left: false, Right: false }
+      buttonReleased: { Left: false, Right: false },
+      gestureDetected: false,
+      faceOrientationChanged: false
     };
     const buttonState = { Left: false, Right: false };
     function onClientEvent(ev) {
@@ -2021,6 +2027,14 @@ if __name__ == '__main__':\r
       if (ev.event === "sensor") {
         if (ev.type === "color") flags.colorChanged[ev.port] = true;
         if (ev.type === "distance") flags.distanceChanged[ev.port] = true;
+        if (ev.type === "gesture") {
+          lastGesture = ev.value || "";
+          flags.gestureDetected = true;
+        }
+        if (ev.type === "face_orientation") {
+          lastFaceOrientation = ev.value || "";
+          flags.faceOrientationChanged = true;
+        }
       } else if (ev.event === "system") {
         const m = ev.metric;
         if (m === "battery") {
@@ -2388,11 +2402,23 @@ if __name__ == '__main__':\r
             },
             "---",
             { blockType: BlockType.LABEL, text: "Sensors" },
+            // Peripheral reads — mirrors GetColor / GetDistance / GetForce / GetColorRGB /
+            // GetReflectedLight in LegoSpikeSensors. colorChannel uses CHANNEL dropdown matching
+            // tiltAngle(AXIS) pattern; one sensor.read returns the requested channel. SSP §5.1.
             {
               opcode: "color",
               blockType: BlockType.REPORTER,
               text: "color at [PORT]",
               arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "C" } }
+            },
+            {
+              opcode: "colorChannel",
+              blockType: BlockType.REPORTER,
+              text: "color [CHANNEL] channel at [PORT]",
+              arguments: {
+                CHANNEL: { type: ArgumentType.STRING, menu: "rgbChannels", defaultValue: "R" },
+                PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "C" }
+              }
             },
             {
               opcode: "distance",
@@ -2412,6 +2438,36 @@ if __name__ == '__main__':\r
               text: "reflected light at [PORT] (%)",
               arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "C" } }
             },
+            // Hub IMU reads — mirrors GetHubTiltAngle / GetHubAcceleration / GetHubAngularVelocity /
+            // GetHubFaceOrientation / GetHubTimer in LegoSpikeSensors.
+            // hubAcceleration / hubAngularVelocity use AXIS dropdown matching tiltAngle pattern.
+            {
+              opcode: "tiltAngle",
+              blockType: BlockType.REPORTER,
+              text: "hub tilt angle [AXIS]",
+              arguments: { AXIS: { type: ArgumentType.STRING, menu: "tiltAxes", defaultValue: "pitch" } }
+            },
+            {
+              opcode: "hubAcceleration",
+              blockType: BlockType.REPORTER,
+              text: "hub acceleration [AXIS] (m/s\xB2)",
+              arguments: { AXIS: { type: ArgumentType.STRING, menu: "xyzAxes", defaultValue: "X" } }
+            },
+            {
+              opcode: "hubAngularVelocity",
+              blockType: BlockType.REPORTER,
+              text: "hub angular velocity [AXIS] (\xB0/s)",
+              arguments: { AXIS: { type: ArgumentType.STRING, menu: "xyzAxes", defaultValue: "X" } }
+            },
+            {
+              opcode: "hubFaceOrientation",
+              blockType: BlockType.REPORTER,
+              text: "hub face orientation"
+            },
+            { opcode: "hubTimer", blockType: BlockType.REPORTER, text: "hub timer (seconds)" },
+            { opcode: "resetHubTimer", blockType: BlockType.COMMAND, text: "reset hub timer" },
+            // Boolean/predicate checks — mirrors IsColor / IsCloserThan / IsForceSensorChecked /
+            // IsReflectedLightAbove / IsTilted / IsHubOrientation / IsShaking / IsHubButtonPressed.
             {
               opcode: "isColor",
               blockType: BlockType.BOOLEAN,
@@ -2446,12 +2502,6 @@ if __name__ == '__main__':\r
               arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "D" } }
             },
             {
-              opcode: "tiltAngle",
-              blockType: BlockType.REPORTER,
-              text: "hub tilt angle [AXIS]",
-              arguments: { AXIS: { type: ArgumentType.STRING, menu: "tiltAxes", defaultValue: "pitch" } }
-            },
-            {
               opcode: "isTilted",
               blockType: BlockType.BOOLEAN,
               text: "hub tilted [DIRECTION]?",
@@ -2470,8 +2520,9 @@ if __name__ == '__main__':\r
               text: "hub [BUTTON] button pressed?",
               arguments: { BUTTON: { type: ArgumentType.STRING, menu: "hubButtons", defaultValue: "Left" } }
             },
-            { opcode: "hubTimer", blockType: BlockType.REPORTER, text: "hub timer (seconds)" },
-            { opcode: "resetHubTimer", blockType: BlockType.COMMAND, text: "reset hub timer" },
+            // Subscription hats & reads — mirrors SubscribeToColor / SubscribeToDistance /
+            // SubscribeToHubButton / SubscribeToHubGestures / SubscribeToHubFaceOrientation.
+            // Gesture/face-orientation hats follow Connection's hat+last-value-reporter pattern.
             {
               opcode: "whenColorRead",
               blockType: BlockType.HAT,
@@ -2501,6 +2552,23 @@ if __name__ == '__main__':\r
               arguments: { BUTTON: { type: ArgumentType.STRING, menu: "hubButtons", defaultValue: "Left" } }
             },
             {
+              opcode: "whenHubGesture",
+              blockType: BlockType.HAT,
+              isEdgeActivated: false,
+              text: "when hub gesture detected"
+            },
+            {
+              opcode: "lastGesture",
+              blockType: BlockType.REPORTER,
+              text: "last hub gesture"
+            },
+            {
+              opcode: "whenHubFaceOrientationChanged",
+              blockType: BlockType.HAT,
+              isEdgeActivated: false,
+              text: "when hub face orientation changes"
+            },
+            {
               opcode: "subscribeToColor",
               blockType: BlockType.COMMAND,
               text: "subscribe to color sensor at [PORT]",
@@ -2517,6 +2585,35 @@ if __name__ == '__main__':\r
               blockType: BlockType.COMMAND,
               text: "subscribe to hub [BUTTON] button",
               arguments: { BUTTON: { type: ArgumentType.STRING, menu: "hubButtons", defaultValue: "Left" } }
+            },
+            {
+              opcode: "subscribeToHubGestures",
+              blockType: BlockType.COMMAND,
+              text: "subscribe to hub gestures"
+            },
+            {
+              opcode: "subscribeToHubFaceOrientation",
+              blockType: BlockType.COMMAND,
+              text: "subscribe to hub face orientation"
+            },
+            // Orientation configuration — mirrors SetHubOrientation / SetHubYaw / ResetHubYaw
+            // in LegoSpikeSensors. SSP v0.8 §6.4 orientation commands.
+            {
+              opcode: "setHubOrientation",
+              blockType: BlockType.COMMAND,
+              text: "set hub orientation [FACE]",
+              arguments: { FACE: { type: ArgumentType.STRING, menu: "hubFaces", defaultValue: "Top" } }
+            },
+            {
+              opcode: "setHubYaw",
+              blockType: BlockType.COMMAND,
+              text: "set hub yaw to [DEGREES]\xB0",
+              arguments: { DEGREES: { type: ArgumentType.NUMBER, defaultValue: 0 } }
+            },
+            {
+              opcode: "resetHubYaw",
+              blockType: BlockType.COMMAND,
+              text: "reset hub yaw"
             },
             // Distance-sensor indicator LEDs — mirrors LightUpDistanceSensor in LegoSpikeSensors
             // (filed under Sensors in App Inventor; uses the distance-sensor port). SSP §11 ext.
@@ -2611,6 +2708,8 @@ if __name__ == '__main__':\r
             hubButtons: { acceptReporters: true, items: menuOf(HUB_BUTTONS) },
             tiltDirs: { acceptReporters: true, items: menuOf(TILT_DIRS) },
             tiltAxes: { acceptReporters: true, items: menuOf(TILT_AXES) },
+            rgbChannels: { acceptReporters: false, items: menuOf(RGB_CHANNELS) },
+            xyzAxes: { acceptReporters: false, items: menuOf(XYZ_AXES) },
             btnColors: { acceptReporters: true, items: menuOf(BTN_COLORS) },
             images: { acceptReporters: true, items: menuOf(IMAGES) },
             matrixAngles: { acceptReporters: false, items: menuOf(MATRIX_ANGLES) },
@@ -2899,8 +2998,15 @@ if __name__ == '__main__':\r
         return send({ cmd: "led.set", port: "status", color: Cast.toString(COLOR) });
       }
       // ── Sensors (reporters & booleans use one-shot request/response) ────────────────
+      // Peripheral reads
       color({ PORT }) {
         return readSensor(PORT, "color", "");
+      }
+      async colorChannel({ PORT, CHANNEL }) {
+        const ev = await requestEvent({ cmd: "sensor.read", port: PORT, type: "rgb" }, sensorMatch(PORT, "rgb"));
+        if (!ev || !Array.isArray(ev.value)) return 0;
+        const ch = Cast.toString(CHANNEL).toUpperCase();
+        return ch === "R" ? ev.value[0] : ch === "G" ? ev.value[1] : ev.value[2];
       }
       distance({ PORT }) {
         return readSensor(PORT, "distance", -1);
@@ -2911,6 +3017,31 @@ if __name__ == '__main__':\r
       reflectedLight({ PORT }) {
         return readSensor(PORT, "reflected", 0);
       }
+      // Hub IMU reads
+      tiltAngle({ AXIS }) {
+        return readSensor("imu", Cast.toString(AXIS).toLowerCase(), 0);
+      }
+      async hubAcceleration({ AXIS }) {
+        const ev = await requestEvent({ cmd: "sensor.read", port: "imu", type: "acceleration" }, sensorMatch("imu", "acceleration"));
+        if (!ev || typeof ev.value !== "object" || ev.value === null) return 0;
+        return ev.value[Cast.toString(AXIS).toLowerCase()] ?? 0;
+      }
+      async hubAngularVelocity({ AXIS }) {
+        const ev = await requestEvent({ cmd: "sensor.read", port: "imu", type: "angular_velocity" }, sensorMatch("imu", "angular_velocity"));
+        if (!ev || typeof ev.value !== "object" || ev.value === null) return 0;
+        return ev.value[Cast.toString(AXIS).toLowerCase()] ?? 0;
+      }
+      hubFaceOrientation() {
+        return readSensor("imu", "face_orientation", "");
+      }
+      async hubTimer() {
+        const ev = await requestEvent({ cmd: "timer.get" }, sensorMatch("timer", "elapsed"));
+        return ev ? ev.value : 0;
+      }
+      resetHubTimer() {
+        return send({ cmd: "timer.reset" });
+      }
+      // Boolean/predicate checks
       async isColor({ PORT, COLOR }) {
         const ev = await requestEvent(
           { cmd: "sensor.read", port: PORT, type: "is_color", color: Cast.toString(COLOR).toLowerCase() },
@@ -2937,9 +3068,6 @@ if __name__ == '__main__':\r
           { cmd: "sensor.read", port: PORT, type: "touched" },
           sensorMatch(PORT, "touched")
         ).then((ev) => !!(ev && ev.value));
-      }
-      tiltAngle({ AXIS }) {
-        return readSensor("imu", Cast.toString(AXIS).toLowerCase(), 0);
       }
       async isTilted({ DIRECTION }) {
         const dir = Cast.toString(DIRECTION).toLowerCase();
@@ -2971,13 +3099,7 @@ if __name__ == '__main__':\r
         );
         return !!(ev && ev.value && ev.value.pressed);
       }
-      async hubTimer() {
-        const ev = await requestEvent({ cmd: "timer.get" }, sensorMatch("timer", "elapsed"));
-        return ev ? ev.value : 0;
-      }
-      resetHubTimer() {
-        return send({ cmd: "timer.reset" });
-      }
+      // Subscription hats & reads
       whenColorRead({ PORT }) {
         const v = !!flags.colorChanged[PORT];
         flags.colorChanged[PORT] = false;
@@ -2998,17 +3120,45 @@ if __name__ == '__main__':\r
         flags.buttonReleased[BUTTON] = false;
         return v;
       }
+      whenHubGesture() {
+        const v = flags.gestureDetected;
+        flags.gestureDetected = false;
+        return v;
+      }
+      lastGesture() {
+        return lastGesture;
+      }
+      whenHubFaceOrientationChanged() {
+        const v = flags.faceOrientationChanged;
+        flags.faceOrientationChanged = false;
+        return v;
+      }
       subscribeToColor({ PORT }) {
         return send({ cmd: "sensor.subscribe", port: PORT, type: "color", mode: "on_change" });
       }
       subscribeToDistance({ PORT }) {
         return send({ cmd: "sensor.subscribe", port: PORT, type: "distance", mode: "on_change" });
       }
-      // Mirrors SubscribeToHubLeftButton / SubscribeToHubRightButton in LegoSpikeSensors.
       subscribeToHubButton({ BUTTON }) {
         return send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
       }
-      // Distance-sensor indicator LEDs (relocated from Light; mirrors LightUpDistanceSensor in LegoSpikeSensors)
+      subscribeToHubGestures() {
+        return send({ cmd: "sensor.subscribe", port: "imu", type: "gesture", mode: "on_change" });
+      }
+      subscribeToHubFaceOrientation() {
+        return send({ cmd: "sensor.subscribe", port: "imu", type: "face_orientation", mode: "on_change" });
+      }
+      // Orientation configuration
+      setHubOrientation({ FACE }) {
+        return send({ cmd: "orientation.set_reference", face: Cast.toString(FACE) });
+      }
+      setHubYaw({ DEGREES }) {
+        return send({ cmd: "orientation.set_yaw", angle: Cast.toNumber(DEGREES) });
+      }
+      resetHubYaw() {
+        return send({ cmd: "orientation.reset_yaw" });
+      }
+      // Distance-sensor indicator LEDs
       lightUpDistanceSensor({ PORT, TL, TR, BL, BR }) {
         const c = (v) => Math.max(0, Math.min(100, Cast.toNumber(v)));
         return send({ cmd: "led.distance", port: PORT, tl: c(TL), tr: c(TR), bl: c(BL), br: c(BR) });

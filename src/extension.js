@@ -32,6 +32,8 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   const MOTOR_MODES       = ["speed", "power"];
   const MOVEMENT_DIRS     = ["forward", "backward"];
   const MATRIX_ANGLES     = ["0", "90", "180", "270"];
+  const RGB_CHANNELS      = ["R", "G", "B"];
+  const XYZ_AXES          = ["X", "Y", "Z"];
 
   const NOTES       = [
     "C3","Csharp3","D3","Dsharp3","E3","F3","Fsharp3","G3","Gsharp3","A3","Asharp3","B3",
@@ -79,15 +81,21 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   // Reporters return this synchronously; command blocks trigger a fresh read.
   const sysCache = { battery: 0, temperature: 0, charging: false };
 
+  // IMU subscription state — updated by routeSSP when subscription events arrive.
+  let lastGesture          = "";   // last gesture from SubscribeToHubGestures
+  let lastFaceOrientation  = "";   // last face from SubscribeToHubFaceOrientation (also one-shot reads)
+
   // Edge-trigger flags for hat blocks (set by the subscription event handler)
   const flags = {
     hubConnected: false,
     hubDisconnected: false,
-    error:           false,
-    colorChanged:    {},   // port → bool
-    distanceChanged: {},   // port → bool
-    buttonPressed:   { Left: false, Right: false },
-    buttonReleased:  { Left: false, Right: false },
+    error:              false,
+    colorChanged:       {},   // port → bool
+    distanceChanged:    {},   // port → bool
+    buttonPressed:      { Left: false, Right: false },
+    buttonReleased:     { Left: false, Right: false },
+    gestureDetected:    false,
+    faceOrientationChanged: false,
   };
   const buttonState = { Left: false, Right: false };
 
@@ -125,8 +133,12 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
       return;
     }
     if (ev.event === "sensor") {
-      if (ev.type === "color")    flags.colorChanged[ev.port] = true;
-      if (ev.type === "distance") flags.distanceChanged[ev.port] = true;
+      if (ev.type === "color")            flags.colorChanged[ev.port] = true;
+      if (ev.type === "distance")         flags.distanceChanged[ev.port] = true;
+      // IMU subscription events (gesture / face_orientation) — mirrors HubGestureDetected /
+      // HubFaceOrientationChanged from LegoSpikeSensors.SubscribeToHub* subscriptions.
+      if (ev.type === "gesture")          { lastGesture = ev.value || ""; flags.gestureDetected = true; }
+      if (ev.type === "face_orientation") { lastFaceOrientation = ev.value || ""; flags.faceOrientationChanged = true; }
     } else if (ev.event === "system") {
       const m = ev.metric;
       // Cache system metric responses (mirrors LegoSpikeSystem.onHubData).
@@ -404,9 +416,18 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
 
           "---",
           { blockType: BlockType.LABEL, text: "Sensors" },
+
+          // Peripheral reads — mirrors GetColor / GetDistance / GetForce / GetColorRGB /
+          // GetReflectedLight in LegoSpikeSensors. colorChannel uses CHANNEL dropdown matching
+          // tiltAngle(AXIS) pattern; one sensor.read returns the requested channel. SSP §5.1.
           { opcode: "color", blockType: BlockType.REPORTER,
             text: "color at [PORT]",
             arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "C" } } },
+          { opcode: "colorChannel", blockType: BlockType.REPORTER,
+            text: "color [CHANNEL] channel at [PORT]",
+            arguments: {
+              CHANNEL: { type: ArgumentType.STRING, menu: "rgbChannels", defaultValue: "R" },
+              PORT:    { type: ArgumentType.STRING, menu: "ports",       defaultValue: "C" } } },
           { opcode: "distance", blockType: BlockType.REPORTER,
             text: "distance at [PORT] (mm)",
             arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "B" } } },
@@ -416,6 +437,26 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "reflectedLight", blockType: BlockType.REPORTER,
             text: "reflected light at [PORT] (%)",
             arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "C" } } },
+
+          // Hub IMU reads — mirrors GetHubTiltAngle / GetHubAcceleration / GetHubAngularVelocity /
+          // GetHubFaceOrientation / GetHubTimer in LegoSpikeSensors.
+          // hubAcceleration / hubAngularVelocity use AXIS dropdown matching tiltAngle pattern.
+          { opcode: "tiltAngle", blockType: BlockType.REPORTER,
+            text: "hub tilt angle [AXIS]",
+            arguments: { AXIS: { type: ArgumentType.STRING, menu: "tiltAxes", defaultValue: "pitch" } } },
+          { opcode: "hubAcceleration", blockType: BlockType.REPORTER,
+            text: "hub acceleration [AXIS] (m/s²)",
+            arguments: { AXIS: { type: ArgumentType.STRING, menu: "xyzAxes", defaultValue: "X" } } },
+          { opcode: "hubAngularVelocity", blockType: BlockType.REPORTER,
+            text: "hub angular velocity [AXIS] (°/s)",
+            arguments: { AXIS: { type: ArgumentType.STRING, menu: "xyzAxes", defaultValue: "X" } } },
+          { opcode: "hubFaceOrientation", blockType: BlockType.REPORTER,
+            text: "hub face orientation" },
+          { opcode: "hubTimer", blockType: BlockType.REPORTER, text: "hub timer (seconds)" },
+          { opcode: "resetHubTimer", blockType: BlockType.COMMAND, text: "reset hub timer" },
+
+          // Boolean/predicate checks — mirrors IsColor / IsCloserThan / IsForceSensorChecked /
+          // IsReflectedLightAbove / IsTilted / IsHubOrientation / IsShaking / IsHubButtonPressed.
           { opcode: "isColor", blockType: BlockType.BOOLEAN,
             text: "color at [PORT] is [COLOR]?",
             arguments: {
@@ -434,9 +475,6 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "isForceSensorPressed", blockType: BlockType.BOOLEAN,
             text: "force sensor at [PORT] pressed?",
             arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "D" } } },
-          { opcode: "tiltAngle", blockType: BlockType.REPORTER,
-            text: "hub tilt angle [AXIS]",
-            arguments: { AXIS: { type: ArgumentType.STRING, menu: "tiltAxes", defaultValue: "pitch" } } },
           { opcode: "isTilted", blockType: BlockType.BOOLEAN,
             text: "hub tilted [DIRECTION]?",
             arguments: { DIRECTION: { type: ArgumentType.STRING, menu: "tiltDirs", defaultValue: "forward" } } },
@@ -447,8 +485,10 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "isHubButtonPressed", blockType: BlockType.BOOLEAN,
             text: "hub [BUTTON] button pressed?",
             arguments: { BUTTON: { type: ArgumentType.STRING, menu: "hubButtons", defaultValue: "Left" } } },
-          { opcode: "hubTimer", blockType: BlockType.REPORTER, text: "hub timer (seconds)" },
-          { opcode: "resetHubTimer", blockType: BlockType.COMMAND, text: "reset hub timer" },
+
+          // Subscription hats & reads — mirrors SubscribeToColor / SubscribeToDistance /
+          // SubscribeToHubButton / SubscribeToHubGestures / SubscribeToHubFaceOrientation.
+          // Gesture/face-orientation hats follow Connection's hat+last-value-reporter pattern.
           { opcode: "whenColorRead", blockType: BlockType.HAT, isEdgeActivated: false,
             text: "when color changes at [PORT]",
             arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "C" } } },
@@ -461,6 +501,12 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "whenHubButtonReleased", blockType: BlockType.HAT, isEdgeActivated: false,
             text: "when hub [BUTTON] button released",
             arguments: { BUTTON: { type: ArgumentType.STRING, menu: "hubButtons", defaultValue: "Left" } } },
+          { opcode: "whenHubGesture", blockType: BlockType.HAT, isEdgeActivated: false,
+            text: "when hub gesture detected" },
+          { opcode: "lastGesture", blockType: BlockType.REPORTER,
+            text: "last hub gesture" },
+          { opcode: "whenHubFaceOrientationChanged", blockType: BlockType.HAT, isEdgeActivated: false,
+            text: "when hub face orientation changes" },
           { opcode: "subscribeToColor", blockType: BlockType.COMMAND,
             text: "subscribe to color sensor at [PORT]",
             arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "C" } } },
@@ -470,6 +516,21 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "subscribeToHubButton", blockType: BlockType.COMMAND,
             text: "subscribe to hub [BUTTON] button",
             arguments: { BUTTON: { type: ArgumentType.STRING, menu: "hubButtons", defaultValue: "Left" } } },
+          { opcode: "subscribeToHubGestures", blockType: BlockType.COMMAND,
+            text: "subscribe to hub gestures" },
+          { opcode: "subscribeToHubFaceOrientation", blockType: BlockType.COMMAND,
+            text: "subscribe to hub face orientation" },
+
+          // Orientation configuration — mirrors SetHubOrientation / SetHubYaw / ResetHubYaw
+          // in LegoSpikeSensors. SSP v0.8 §6.4 orientation commands.
+          { opcode: "setHubOrientation", blockType: BlockType.COMMAND,
+            text: "set hub orientation [FACE]",
+            arguments: { FACE: { type: ArgumentType.STRING, menu: "hubFaces", defaultValue: "Top" } } },
+          { opcode: "setHubYaw", blockType: BlockType.COMMAND,
+            text: "set hub yaw to [DEGREES]°",
+            arguments: { DEGREES: { type: ArgumentType.NUMBER, defaultValue: 0 } } },
+          { opcode: "resetHubYaw", blockType: BlockType.COMMAND,
+            text: "reset hub yaw" },
 
           // Distance-sensor indicator LEDs — mirrors LightUpDistanceSensor in LegoSpikeSensors
           // (filed under Sensors in App Inventor; uses the distance-sensor port). SSP §11 ext.
@@ -540,7 +601,9 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           hubFaces:    { acceptReporters: true, items: menuOf(HUB_FACES) },
           hubButtons:  { acceptReporters: true, items: menuOf(HUB_BUTTONS) },
           tiltDirs:    { acceptReporters: true, items: menuOf(TILT_DIRS) },
-          tiltAxes:    { acceptReporters: true, items: menuOf(TILT_AXES) },
+          tiltAxes:    { acceptReporters: true,  items: menuOf(TILT_AXES) },
+          rgbChannels: { acceptReporters: false, items: menuOf(RGB_CHANNELS) },
+          xyzAxes:     { acceptReporters: false, items: menuOf(XYZ_AXES) },
           btnColors:    { acceptReporters: true, items: menuOf(BTN_COLORS) },
           images:       { acceptReporters: true, items: menuOf(IMAGES) },
           matrixAngles: { acceptReporters: false, items: menuOf(MATRIX_ANGLES) },
@@ -734,11 +797,36 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     }
 
     // ── Sensors (reporters & booleans use one-shot request/response) ────────────────
+    // Peripheral reads
     color({ PORT })          { return readSensor(PORT, "color", ""); }
+    async colorChannel({ PORT, CHANNEL }) {
+      const ev = await requestEvent({ cmd: "sensor.read", port: PORT, type: "rgb" }, sensorMatch(PORT, "rgb"));
+      if (!ev || !Array.isArray(ev.value)) return 0;
+      const ch = Cast.toString(CHANNEL).toUpperCase();
+      return ch === "R" ? ev.value[0] : ch === "G" ? ev.value[1] : ev.value[2];
+    }
     distance({ PORT })       { return readSensor(PORT, "distance", -1); }
     force({ PORT })          { return readSensor(PORT, "force", 0); }
     reflectedLight({ PORT }) { return readSensor(PORT, "reflected", 0); }
-
+    // Hub IMU reads
+    tiltAngle({ AXIS }) { return readSensor("imu", Cast.toString(AXIS).toLowerCase(), 0); }
+    async hubAcceleration({ AXIS }) {
+      const ev = await requestEvent({ cmd: "sensor.read", port: "imu", type: "acceleration" }, sensorMatch("imu", "acceleration"));
+      if (!ev || typeof ev.value !== "object" || ev.value === null) return 0;
+      return ev.value[Cast.toString(AXIS).toLowerCase()] ?? 0;
+    }
+    async hubAngularVelocity({ AXIS }) {
+      const ev = await requestEvent({ cmd: "sensor.read", port: "imu", type: "angular_velocity" }, sensorMatch("imu", "angular_velocity"));
+      if (!ev || typeof ev.value !== "object" || ev.value === null) return 0;
+      return ev.value[Cast.toString(AXIS).toLowerCase()] ?? 0;
+    }
+    hubFaceOrientation() { return readSensor("imu", "face_orientation", ""); }
+    async hubTimer() {
+      const ev = await requestEvent({ cmd: "timer.get" }, sensorMatch("timer", "elapsed"));
+      return ev ? ev.value : 0;
+    }
+    resetHubTimer() { return send({ cmd: "timer.reset" }); }
+    // Boolean/predicate checks
     async isColor({ PORT, COLOR }) {
       const ev = await requestEvent(
         { cmd: "sensor.read", port: PORT, type: "is_color", color: Cast.toString(COLOR).toLowerCase() },
@@ -761,7 +849,6 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
       return requestEvent({ cmd: "sensor.read", port: PORT, type: "touched" },
         sensorMatch(PORT, "touched")).then((ev) => !!(ev && ev.value));
     }
-    tiltAngle({ AXIS }) { return readSensor("imu", Cast.toString(AXIS).toLowerCase(), 0); }
     async isTilted({ DIRECTION }) {
       const dir = Cast.toString(DIRECTION).toLowerCase();
       const ev = await requestEvent(
@@ -787,32 +874,30 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
         systemMatch("is_button_pressed"));
       return !!(ev && ev.value && ev.value.pressed);
     }
-    async hubTimer() {
-      const ev = await requestEvent({ cmd: "timer.get" }, sensorMatch("timer", "elapsed"));
-      return ev ? ev.value : 0;
-    }
-    resetHubTimer() { return send({ cmd: "timer.reset" }); }
-
+    // Subscription hats & reads
     whenColorRead({ PORT })    { const v = !!flags.colorChanged[PORT];    flags.colorChanged[PORT]    = false; return v; }
     whenDistanceRead({ PORT }) { const v = !!flags.distanceChanged[PORT]; flags.distanceChanged[PORT] = false; return v; }
     whenHubButtonPressed({ BUTTON }) {
-      const v = !!flags.buttonPressed[BUTTON];
-      flags.buttonPressed[BUTTON] = false;
-      return v;
+      const v = !!flags.buttonPressed[BUTTON];  flags.buttonPressed[BUTTON]  = false; return v;
     }
     whenHubButtonReleased({ BUTTON }) {
-      const v = !!flags.buttonReleased[BUTTON];
-      flags.buttonReleased[BUTTON] = false;
-      return v;
+      const v = !!flags.buttonReleased[BUTTON]; flags.buttonReleased[BUTTON] = false; return v;
     }
-
+    whenHubGesture()               { const v = flags.gestureDetected;       flags.gestureDetected       = false; return v; }
+    lastGesture()                  { return lastGesture; }
+    whenHubFaceOrientationChanged(){ const v = flags.faceOrientationChanged; flags.faceOrientationChanged = false; return v; }
     subscribeToColor({ PORT })    { return send({ cmd: "sensor.subscribe", port: PORT, type: "color",    mode: "on_change" }); }
     subscribeToDistance({ PORT }) { return send({ cmd: "sensor.subscribe", port: PORT, type: "distance", mode: "on_change" }); }
-    // Mirrors SubscribeToHubLeftButton / SubscribeToHubRightButton in LegoSpikeSensors.
     subscribeToHubButton({ BUTTON }) {
       return send({ cmd: "system.subscribe", metric: "button." + Cast.toString(BUTTON).toLowerCase(), interval: 100 });
     }
-    // Distance-sensor indicator LEDs (relocated from Light; mirrors LightUpDistanceSensor in LegoSpikeSensors)
+    subscribeToHubGestures()         { return send({ cmd: "sensor.subscribe", port: "imu", type: "gesture",          mode: "on_change" }); }
+    subscribeToHubFaceOrientation()  { return send({ cmd: "sensor.subscribe", port: "imu", type: "face_orientation", mode: "on_change" }); }
+    // Orientation configuration
+    setHubOrientation({ FACE })    { return send({ cmd: "orientation.set_reference", face: Cast.toString(FACE) }); }
+    setHubYaw({ DEGREES })         { return send({ cmd: "orientation.set_yaw",       angle: Cast.toNumber(DEGREES) }); }
+    resetHubYaw()                  { return send({ cmd: "orientation.reset_yaw" }); }
+    // Distance-sensor indicator LEDs
     lightUpDistanceSensor({ PORT, TL, TR, BL, BR }) {
       const c = (v) => Math.max(0, Math.min(100, Cast.toNumber(v)));
       return send({ cmd: "led.distance", port: PORT, tl: c(TL), tr: c(TR), bl: c(BL), br: c(BR) });
