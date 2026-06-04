@@ -59,6 +59,16 @@ The extension detects physical drops (hub powered off, out of range) via the `ga
 event — `when hub disconnected` fires immediately with reason `connection_lost`, rather than waiting up
 to 10 s for the heartbeat timeout.
 
+### Web Bluetooth limitations
+The following App Inventor capabilities have no Scratch equivalent due to Web Bluetooth API restrictions:
+
+| App Inventor block | Reason omitted |
+|---|---|
+| `StartScanning`, `HubCount`, `HubName`, `ConnectToHub(index)` | Web Bluetooth has no programmatic scan or device enumeration; the browser chooser replaces them |
+| `GetRSSI` / `RSSIRead` | Web Bluetooth does not expose RSSI for a connected GATT device; the hub itself returns `None` for `connection_rssi` |
+
+Battery level, temperature, and charging state are available via the System blocks (`get hub battery level`, `get hub temperature`, `get hub charging state`).
+
 ## Status
 Phase 4a — blocks implemented and hardware-tested (Connection class parity with App Inventor).
 See [`../solaria-lib-spike-prime/PHASE_4A_PLAN.md`](../solaria-lib-spike-prime/PHASE_4A_PLAN.md).

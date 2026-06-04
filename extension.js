@@ -2668,9 +2668,12 @@ if __name__ == '__main__':\r
             { opcode: "volume", blockType: BlockType.REPORTER, text: "hub volume (%)" },
             "---",
             { blockType: BlockType.LABEL, text: "System" },
-            // Command blocks trigger a one-shot read (mirrors GetBatteryLevel / GetTemperature /
-            // IsCharging in LegoSpikeSystem). The hub responds asynchronously; routeSSP caches
-            // the value so the reporters below return it on the next Scratch tick.
+            // Metrics (command + cached reporter) — mirrors GetBatteryLevel / GetTemperature /
+            // IsCharging in LegoSpikeSystem. Fire-and-forget command sends system.read; routeSSP
+            // caches the value; reporter returns the cache synchronously.
+            // GetRSSI / RSSIRead from LegoSpikeSystem has no equivalent here: App Inventor reads
+            // RSSI via BluetoothLE transport reflection; Web Bluetooth does not expose connected-
+            // device RSSI. See README "Web Bluetooth limitations".
             { opcode: "requestBatteryLevel", blockType: BlockType.COMMAND, text: "get hub battery level" },
             { opcode: "requestTemperature", blockType: BlockType.COMMAND, text: "get hub temperature" },
             { opcode: "requestCharging", blockType: BlockType.COMMAND, text: "get hub charging state" },
