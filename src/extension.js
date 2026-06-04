@@ -588,6 +588,10 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
 
           "---",
           { blockType: BlockType.LABEL, text: "Music" },
+
+          // Note & rest playback — mirrors PlayNoteForBeats / RestForBeats in LegoSpikeMusic.
+          // Blocking: sound.beep {wait:true} + client await so notes sequence in Scratch.
+          // Note → MIDI → freq via 440·2^((midi−69)/12); beats → ms via current tempo.
           { opcode: "playNoteForBeats", blockType: BlockType.COMMAND,
             text: "play note [NOTE] for [BEATS] beats",
             arguments: {
@@ -596,6 +600,9 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "restForBeats", blockType: BlockType.COMMAND,
             text: "rest for [BEATS] beats",
             arguments: { BEATS: { type: ArgumentType.NUMBER, defaultValue: 1 } } },
+
+          // Tempo — mirrors SetTempo / ChangeTempo / GetTempo in LegoSpikeMusic.
+          // Client-side state only (tempo is in BPM, min 1).
           { opcode: "setTempo", blockType: BlockType.COMMAND,
             text: "set tempo to [BPM] BPM",
             arguments: { BPM: { type: ArgumentType.NUMBER, defaultValue: 120 } } },
@@ -947,7 +954,8 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     temperature()  { return sysCache.temperature; }
     isCharging()   { return sysCache.charging; }
 
-    // ── Music (client-side tempo; await duration so notes sequence in Scratch) ───────
+    // ── Music ──────────────────────────────────────────────────────────────────────────
+    // Note & rest playback
     async playNoteForBeats({ NOTE, BEATS }) {
       const midi = NOTE_MIDI[NOTE] ?? 69;
       const freq = Math.round(440 * Math.pow(2, (midi - 69) / 12));
@@ -960,6 +968,7 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
       await send({ cmd: "sound.rest", duration: ms });
       await waitMs(ms);
     }
+    // Tempo
     setTempo({ BPM })      { tempo = Math.max(1, Cast.toNumber(BPM)); }
     changeTempo({ DELTA }) { tempo = Math.max(1, tempo + Cast.toNumber(DELTA)); }
     tempo()                { return tempo; }
