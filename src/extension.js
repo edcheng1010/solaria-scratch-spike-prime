@@ -545,15 +545,25 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
 
           "---",
           { blockType: BlockType.LABEL, text: "Sound" },
+
+          // Tone — mirrors Beep / PlayBeepForSeconds / StartPlayingBeep / StopAllSounds.
+          // Non-blocking: duration is baked into sound.beep; hub plays while client continues.
           { opcode: "beep", blockType: BlockType.COMMAND,
             text: "beep at [FREQ] Hz for [DUR] ms",
             arguments: {
               FREQ: { type: ArgumentType.NUMBER, defaultValue: 440 },
               DUR:  { type: ArgumentType.NUMBER, defaultValue: 500 } } },
+          { opcode: "beepForSeconds", blockType: BlockType.COMMAND,
+            text: "beep at [FREQ] Hz for [SECS] seconds",
+            arguments: {
+              FREQ: { type: ArgumentType.NUMBER, defaultValue: 440 },
+              SECS: { type: ArgumentType.NUMBER, defaultValue: 1 } } },
           { opcode: "startBeep", blockType: BlockType.COMMAND,
             text: "start beeping at [FREQ] Hz",
             arguments: { FREQ: { type: ArgumentType.NUMBER, defaultValue: 440 } } },
           { opcode: "stopAllSounds", blockType: BlockType.COMMAND, text: "stop all sounds" },
+
+          // Volume — mirrors SetVolume / GetVolume → VolumeRead in LegoSpikeSound.
           { opcode: "setVolume", blockType: BlockType.COMMAND,
             text: "set hub volume to [LEVEL] %",
             arguments: { LEVEL: { type: ArgumentType.NUMBER, defaultValue: 75 } } },
@@ -904,8 +914,12 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     }
 
     // ── Sound ──────────────────────────────────────────────────────────────────────
+    // Tone
     beep({ FREQ, DUR }) {
       return send({ cmd: "sound.beep", freq: Cast.toNumber(FREQ), duration: Cast.toNumber(DUR) });
+    }
+    beepForSeconds({ FREQ, SECS }) {
+      return send({ cmd: "sound.beep", freq: Cast.toNumber(FREQ), duration: Math.round(Cast.toNumber(SECS) * 1000) });
     }
     startBeep({ FREQ }) { return send({ cmd: "sound.beep", freq: Cast.toNumber(FREQ) }); }
     stopAllSounds() { return send({ cmd: "sound.stop" }); }
