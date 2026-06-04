@@ -1904,6 +1904,7 @@ if __name__ == '__main__':\r
       "ARROWSOUTH",
       "ARROWWEST"
     ];
+    const MOTOR_MODES = ["speed", "power"];
     const NOTES = [
       "C3",
       "Csharp3",
@@ -1973,8 +1974,8 @@ if __name__ == '__main__':\r
     let disconnectReason = "";
     let nameFilter = "";
     let debugEnabled = false;
-    let lastErrorMessage = "";
-    let lastErrorCode = 0;
+    let errMessage = "";
+    let errCode = 0;
     const sysCache = { battery: 0, temperature: 0, charging: false };
     const flags = {
       hubConnected: false,
@@ -2000,8 +2001,8 @@ if __name__ == '__main__':\r
         flags.hubDisconnected = true;
         client = null;
       } else if (ev.type === "error") {
-        lastErrorMessage = ev.message || "";
-        lastErrorCode = 0;
+        errMessage = ev.message || "";
+        errCode = 0;
         flags.error = true;
       } else if (ev.type === "ssp") {
         routeSSP(ev.event);
@@ -2010,8 +2011,8 @@ if __name__ == '__main__':\r
     function routeSSP(ev) {
       if (!ev) return;
       if (ev.event === "error") {
-        lastErrorCode = ev.code || 0;
-        lastErrorMessage = ev.message || "";
+        errCode = ev.code || 0;
+        errMessage = ev.message || "";
         flags.error = true;
         return;
       }
@@ -2099,8 +2100,8 @@ if __name__ == '__main__':\r
             { opcode: "whenHubDisconnected", blockType: BlockType.HAT, isEdgeActivated: false, text: "when hub disconnected" },
             { opcode: "lastDisconnectReason", blockType: BlockType.REPORTER, text: "last disconnect reason" },
             { opcode: "whenErrorOccurs", blockType: BlockType.HAT, isEdgeActivated: false, text: "when error occurs" },
-            { opcode: "getLastErrorMessage", blockType: BlockType.REPORTER, text: "last error message" },
-            { opcode: "getLastErrorCode", blockType: BlockType.REPORTER, text: "last error code" },
+            { opcode: "lastErrorMessage", blockType: BlockType.REPORTER, text: "last error message" },
+            { opcode: "lastErrorCode", blockType: BlockType.REPORTER, text: "last error code" },
             // Configuration — mirrors CustomDeviceName (namePrefix filter) and DebugMode
             {
               opcode: "setNameFilter",
@@ -2116,14 +2117,17 @@ if __name__ == '__main__':\r
             },
             "---",
             { blockType: BlockType.LABEL, text: "Motors" },
+            // Run / stop — mirrors StartMotor / StopMotor / RunMotorForDuration in LegoSpikeMotors.
+            // MODE dropdown: speed (closed-loop velocity) or power (open-loop duty cycle, SSP §6.1).
             {
               opcode: "startMotor",
               blockType: BlockType.COMMAND,
-              text: "start motor [PORT] [DIRECTION] at [SPEED] %",
+              text: "start motor [PORT] [DIRECTION] at [SPEED] % [MODE]",
               arguments: {
                 PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "A" },
                 DIRECTION: { type: ArgumentType.STRING, menu: "directions", defaultValue: "clockwise" },
-                SPEED: { type: ArgumentType.NUMBER, defaultValue: 75 }
+                SPEED: { type: ArgumentType.NUMBER, defaultValue: 75 },
+                MODE: { type: ArgumentType.STRING, menu: "motorModes", defaultValue: "speed" }
               }
             },
             {
@@ -2158,6 +2162,20 @@ if __name__ == '__main__':\r
               }
             },
             {
+              opcode: "runMotorForRotations",
+              blockType: BlockType.COMMAND,
+              text: "run motor [PORT] [DIRECTION] at [SPEED] % for [ROT] rotations",
+              arguments: {
+                PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "A" },
+                DIRECTION: { type: ArgumentType.STRING, menu: "directions", defaultValue: "clockwise" },
+                SPEED: { type: ArgumentType.NUMBER, defaultValue: 75 },
+                ROT: { type: ArgumentType.NUMBER, defaultValue: 1 }
+              }
+            },
+            // Position & goto — mirrors GoToMotorAbsolutePosition / GoToMotorRelativePosition /
+            // ResetRelativeMotorPosition in LegoSpikeMotors. Relative mode is position-controlled
+            // (holds target) whereas run-for-degrees is speed-controlled (no hold at end). SSP §6.1.
+            {
               opcode: "goToMotorPosition",
               blockType: BlockType.COMMAND,
               text: "go to motor [PORT] absolute position [POS]\xB0 at [SPEED] %",
@@ -2167,6 +2185,18 @@ if __name__ == '__main__':\r
                 SPEED: { type: ArgumentType.NUMBER, defaultValue: 75 }
               }
             },
+            {
+              opcode: "goToMotorRelativePosition",
+              blockType: BlockType.COMMAND,
+              text: "go to motor [PORT] [DIRECTION] relative position [DEG]\xB0 at [SPEED] %",
+              arguments: {
+                PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "A" },
+                DIRECTION: { type: ArgumentType.STRING, menu: "directions", defaultValue: "clockwise" },
+                DEG: { type: ArgumentType.NUMBER, defaultValue: 90 },
+                SPEED: { type: ArgumentType.NUMBER, defaultValue: 75 }
+              }
+            },
+            // Configuration — mirrors SetMotorAcceleration / ResetRelativeMotorPosition.
             {
               opcode: "setMotorAcceleration",
               blockType: BlockType.COMMAND,
@@ -2182,14 +2212,22 @@ if __name__ == '__main__':\r
               text: "reset motor [PORT] position",
               arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "A" } }
             },
+            // Reads — mirrors GetMotorRelativePosition / GetMotorAbsolutePosition / GetMotorSpeed.
+            // position = cumulative since last reset (unbounded); absolute_position = 0–359 orientation.
             {
-              opcode: "getMotorPosition",
+              opcode: "motorPosition",
               blockType: BlockType.REPORTER,
-              text: "motor [PORT] position (degrees)",
+              text: "motor [PORT] relative position (degrees)",
               arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "A" } }
             },
             {
-              opcode: "getMotorSpeed",
+              opcode: "motorAbsolutePosition",
+              blockType: BlockType.REPORTER,
+              text: "motor [PORT] absolute position (0\u2013359)",
+              arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "A" } }
+            },
+            {
+              opcode: "motorSpeed",
               blockType: BlockType.REPORTER,
               text: "motor [PORT] speed (%)",
               arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "A" } }
@@ -2297,25 +2335,25 @@ if __name__ == '__main__':\r
             "---",
             { blockType: BlockType.LABEL, text: "Sensors" },
             {
-              opcode: "getColor",
+              opcode: "color",
               blockType: BlockType.REPORTER,
               text: "color at [PORT]",
               arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "C" } }
             },
             {
-              opcode: "getDistance",
+              opcode: "distance",
               blockType: BlockType.REPORTER,
               text: "distance at [PORT] (mm)",
               arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "B" } }
             },
             {
-              opcode: "getForce",
+              opcode: "force",
               blockType: BlockType.REPORTER,
               text: "force at [PORT] (N)",
               arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "D" } }
             },
             {
-              opcode: "getReflectedLight",
+              opcode: "reflectedLight",
               blockType: BlockType.REPORTER,
               text: "reflected light at [PORT] (%)",
               arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "C" } }
@@ -2354,7 +2392,7 @@ if __name__ == '__main__':\r
               arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "D" } }
             },
             {
-              opcode: "getTiltAngle",
+              opcode: "tiltAngle",
               blockType: BlockType.REPORTER,
               text: "hub tilt angle [AXIS]",
               arguments: { AXIS: { type: ArgumentType.STRING, menu: "tiltAxes", defaultValue: "pitch" } }
@@ -2378,7 +2416,7 @@ if __name__ == '__main__':\r
               text: "hub [BUTTON] button pressed?",
               arguments: { BUTTON: { type: ArgumentType.STRING, menu: "hubButtons", defaultValue: "Left" } }
             },
-            { opcode: "getHubTimer", blockType: BlockType.REPORTER, text: "hub timer (seconds)" },
+            { opcode: "hubTimer", blockType: BlockType.REPORTER, text: "hub timer (seconds)" },
             { opcode: "resetHubTimer", blockType: BlockType.COMMAND, text: "reset hub timer" },
             {
               opcode: "whenColorRead",
@@ -2450,7 +2488,7 @@ if __name__ == '__main__':\r
               text: "set hub volume to [LEVEL] %",
               arguments: { LEVEL: { type: ArgumentType.NUMBER, defaultValue: 75 } }
             },
-            { opcode: "getVolume", blockType: BlockType.REPORTER, text: "hub volume (%)" },
+            { opcode: "volume", blockType: BlockType.REPORTER, text: "hub volume (%)" },
             "---",
             { blockType: BlockType.LABEL, text: "System" },
             // Command blocks trigger a one-shot read (mirrors GetBatteryLevel / GetTemperature /
@@ -2460,8 +2498,8 @@ if __name__ == '__main__':\r
             { opcode: "requestTemperature", blockType: BlockType.COMMAND, text: "get hub temperature" },
             { opcode: "requestCharging", blockType: BlockType.COMMAND, text: "get hub charging state" },
             // Reporters return the last cached value (updated by the commands above).
-            { opcode: "getBatteryLevel", blockType: BlockType.REPORTER, text: "hub battery (%)" },
-            { opcode: "getTemperature", blockType: BlockType.REPORTER, text: "hub temperature (\xB0C)" },
+            { opcode: "batteryLevel", blockType: BlockType.REPORTER, text: "hub battery (%)" },
+            { opcode: "temperature", blockType: BlockType.REPORTER, text: "hub temperature (\xB0C)" },
             { opcode: "isCharging", blockType: BlockType.BOOLEAN, text: "hub charging?" },
             "---",
             { blockType: BlockType.LABEL, text: "Music" },
@@ -2492,11 +2530,12 @@ if __name__ == '__main__':\r
               text: "change tempo by [DELTA] BPM",
               arguments: { DELTA: { type: ArgumentType.NUMBER, defaultValue: 10 } }
             },
-            { opcode: "getTempo", blockType: BlockType.REPORTER, text: "tempo (BPM)" }
+            { opcode: "tempo", blockType: BlockType.REPORTER, text: "tempo (BPM)" }
           ],
           menus: {
             ports: { acceptReporters: true, items: menuOf(PORTS) },
             directions: { acceptReporters: true, items: menuOf(DIRECTIONS) },
+            motorModes: { acceptReporters: false, items: menuOf(MOTOR_MODES) },
             stopActions: { acceptReporters: true, items: menuOf(STOP_ACTS) },
             colors: { acceptReporters: true, items: menuOf(COLORS) },
             hubFaces: { acceptReporters: true, items: menuOf(HUB_FACES) },
@@ -2521,8 +2560,8 @@ if __name__ == '__main__':\r
           await client.connect();
         } catch (e) {
           client = null;
-          lastErrorMessage = e && e.message ? e.message : String(e);
-          lastErrorCode = 0;
+          errMessage = e && e.message ? e.message : String(e);
+          errCode = 0;
           flags.error = true;
           console.error("[SolariaSpikePrime] connect error:", e);
         }
@@ -2576,11 +2615,11 @@ if __name__ == '__main__':\r
         flags.error = false;
         return v;
       }
-      getLastErrorMessage() {
-        return lastErrorMessage;
+      lastErrorMessage() {
+        return errMessage;
       }
-      getLastErrorCode() {
-        return lastErrorCode;
+      lastErrorCode() {
+        return errCode;
       }
       // Configuration
       setNameFilter({ PREFIX }) {
@@ -2591,8 +2630,11 @@ if __name__ == '__main__':\r
         if (client) client.setDebug(debugEnabled);
       }
       // ── Motors ──────────────────────────────────────────────────────────────────
-      startMotor({ PORT, DIRECTION, SPEED }) {
-        return send({ cmd: "motor.run", port: PORT, speed: signed(DIRECTION, SPEED) });
+      // Run / stop
+      startMotor({ PORT, DIRECTION, SPEED, MODE }) {
+        const cmd = { cmd: "motor.run", port: PORT, speed: signed(DIRECTION, SPEED) };
+        if (Cast.toString(MODE) === "power") cmd.mode = "power";
+        return send(cmd);
       }
       stopMotor({ PORT, ACTION }) {
         return send({ cmd: "motor.stop", port: PORT, stop_action: ACTION });
@@ -2615,6 +2657,16 @@ if __name__ == '__main__':\r
           duration_unit: "degrees"
         });
       }
+      runMotorForRotations({ PORT, DIRECTION, SPEED, ROT }) {
+        return send({
+          cmd: "motor.run",
+          port: PORT,
+          speed: signed(DIRECTION, SPEED),
+          duration: Cast.toNumber(ROT),
+          duration_unit: "rotations"
+        });
+      }
+      // Position & goto
       goToMotorPosition({ PORT, POS, SPEED }) {
         const pos = Math.max(0, Math.min(359, Cast.toNumber(POS)));
         return send({
@@ -2625,6 +2677,16 @@ if __name__ == '__main__':\r
           mode: "absolute"
         });
       }
+      goToMotorRelativePosition({ PORT, DIRECTION, DEG, SPEED }) {
+        return send({
+          cmd: "motor.goto",
+          port: PORT,
+          position: signed(DIRECTION, DEG),
+          speed: Math.abs(Cast.toNumber(SPEED)),
+          mode: "relative"
+        });
+      }
+      // Configuration
       setMotorAcceleration({ PORT, RATE }) {
         return send({
           cmd: "motor.set_acceleration",
@@ -2635,10 +2697,14 @@ if __name__ == '__main__':\r
       resetMotorPosition({ PORT }) {
         return send({ cmd: "motor.reset", port: PORT });
       }
-      getMotorPosition({ PORT }) {
+      // Reads
+      motorPosition({ PORT }) {
         return readSensor(PORT, "position", 0);
       }
-      getMotorSpeed({ PORT }) {
+      motorAbsolutePosition({ PORT }) {
+        return readSensor(PORT, "absolute_position", 0);
+      }
+      motorSpeed({ PORT }) {
         return readSensor(PORT, "speed", 0);
       }
       // ── Movement ──────────────────────────────────────────────────────────────────
@@ -2730,16 +2796,16 @@ if __name__ == '__main__':\r
         return send({ cmd: "led.distance", port: PORT, tl: c(TL), tr: c(TR), bl: c(BL), br: c(BR) });
       }
       // ── Sensors (reporters & booleans use one-shot request/response) ────────────────
-      getColor({ PORT }) {
+      color({ PORT }) {
         return readSensor(PORT, "color", "");
       }
-      getDistance({ PORT }) {
+      distance({ PORT }) {
         return readSensor(PORT, "distance", -1);
       }
-      getForce({ PORT }) {
+      force({ PORT }) {
         return readSensor(PORT, "force", 0);
       }
-      getReflectedLight({ PORT }) {
+      reflectedLight({ PORT }) {
         return readSensor(PORT, "reflected", 0);
       }
       async isColor({ PORT, COLOR }) {
@@ -2769,7 +2835,7 @@ if __name__ == '__main__':\r
           sensorMatch(PORT, "touched")
         ).then((ev) => !!(ev && ev.value));
       }
-      getTiltAngle({ AXIS }) {
+      tiltAngle({ AXIS }) {
         return readSensor("imu", Cast.toString(AXIS).toLowerCase(), 0);
       }
       async isTilted({ DIRECTION }) {
@@ -2802,7 +2868,7 @@ if __name__ == '__main__':\r
         );
         return !!(ev && ev.value && ev.value.pressed);
       }
-      async getHubTimer() {
+      async hubTimer() {
         const ev = await requestEvent({ cmd: "timer.get" }, sensorMatch("timer", "elapsed"));
         return ev ? ev.value : 0;
       }
@@ -2852,7 +2918,7 @@ if __name__ == '__main__':\r
       setVolume({ LEVEL }) {
         return send({ cmd: "sound.set_volume", level: Math.max(0, Math.min(100, Cast.toNumber(LEVEL))) });
       }
-      async getVolume() {
+      async volume() {
         const ev = await requestEvent(
           { cmd: "sound.read", metric: "volume" },
           (e) => e.event === "sound" && e.metric === "volume"
@@ -2872,10 +2938,10 @@ if __name__ == '__main__':\r
         return send({ cmd: "system.read", metric: "charging" });
       }
       // Reporters return the last value received from the hub (updated by the commands above).
-      getBatteryLevel() {
+      batteryLevel() {
         return sysCache.battery;
       }
-      getTemperature() {
+      temperature() {
         return sysCache.temperature;
       }
       isCharging() {
@@ -2900,7 +2966,7 @@ if __name__ == '__main__':\r
       changeTempo({ DELTA }) {
         tempo = Math.max(1, tempo + Cast.toNumber(DELTA));
       }
-      getTempo() {
+      tempo() {
         return tempo;
       }
     }

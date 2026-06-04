@@ -29,6 +29,8 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   const IMAGES      = ["HAPPY", "SAD", "SMILE", "HEART", "HEARTSMALL", "CONFUSED", "ANGRY",
                         "ASLEEP", "SURPRISED", "YES", "NO",
                         "ARROWNORTH", "ARROWEAST", "ARROWSOUTH", "ARROWWEST"];
+  const MOTOR_MODES = ["speed", "power"];
+
   const NOTES       = [
     "C3","Csharp3","D3","Dsharp3","E3","F3","Fsharp3","G3","Gsharp3","A3","Asharp3","B3",
     "C4","Csharp4","D4","Dsharp4","E4","F4","Fsharp4","G4","Gsharp4","A4","Asharp4","B4",
@@ -64,8 +66,8 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   let debugEnabled    = false;        // DebugMode equivalent
 
   // Error state (mirrors OnError / ErrorOccurred events)
-  let lastErrorMessage = "";
-  let lastErrorCode    = 0;
+  let errMessage = "";
+  let errCode    = 0;
 
   // System metric cache — updated by routeSSP whenever a system event arrives.
   // Reporters return this synchronously; command blocks trigger a fresh read.
@@ -97,9 +99,9 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
       client = null;
     } else if (ev.type === "error") {
       // Transport / lifecycle error (mirrors ErrorOccurred in LegoSpikeConnectivity)
-      lastErrorMessage = ev.message || "";
-      lastErrorCode    = 0;
-      flags.error      = true;
+      errMessage  = ev.message || "";
+      errCode     = 0;
+      flags.error = true;
     } else if (ev.type === "ssp") {
       routeSSP(ev.event);
     }
@@ -111,9 +113,9 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     if (!ev) return;
     // SSP §7 error frames (mirrors LegoSpikeConnectivity.OnError)
     if (ev.event === "error") {
-      lastErrorCode    = ev.code    || 0;
-      lastErrorMessage = ev.message || "";
-      flags.error      = true;
+      errCode     = ev.code    || 0;
+      errMessage  = ev.message || "";
+      flags.error = true;
       return;
     }
     if (ev.event === "sensor") {
@@ -203,8 +205,8 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "whenHubDisconnected", blockType: BlockType.HAT, isEdgeActivated: false, text: "when hub disconnected" },
           { opcode: "lastDisconnectReason",blockType: BlockType.REPORTER, text: "last disconnect reason" },
           { opcode: "whenErrorOccurs",      blockType: BlockType.HAT, isEdgeActivated: false, text: "when error occurs" },
-          { opcode: "getLastErrorMessage", blockType: BlockType.REPORTER, text: "last error message" },
-          { opcode: "getLastErrorCode",    blockType: BlockType.REPORTER, text: "last error code" },
+          { opcode: "lastErrorMessage", blockType: BlockType.REPORTER, text: "last error message" },
+          { opcode: "lastErrorCode",    blockType: BlockType.REPORTER, text: "last error code" },
 
           // Configuration — mirrors CustomDeviceName (namePrefix filter) and DebugMode
           { opcode: "setNameFilter",
@@ -218,12 +220,16 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
 
           "---",
           { blockType: BlockType.LABEL, text: "Motors" },
+
+          // Run / stop — mirrors StartMotor / StopMotor / RunMotorForDuration in LegoSpikeMotors.
+          // MODE dropdown: speed (closed-loop velocity) or power (open-loop duty cycle, SSP §6.1).
           { opcode: "startMotor", blockType: BlockType.COMMAND,
-            text: "start motor [PORT] [DIRECTION] at [SPEED] %",
+            text: "start motor [PORT] [DIRECTION] at [SPEED] % [MODE]",
             arguments: {
-              PORT:      { type: ArgumentType.STRING, menu: "ports",      defaultValue: "A" },
-              DIRECTION: { type: ArgumentType.STRING, menu: "directions", defaultValue: "clockwise" },
-              SPEED:     { type: ArgumentType.NUMBER, defaultValue: 75 } } },
+              PORT:      { type: ArgumentType.STRING, menu: "ports",       defaultValue: "A" },
+              DIRECTION: { type: ArgumentType.STRING, menu: "directions",  defaultValue: "clockwise" },
+              SPEED:     { type: ArgumentType.NUMBER, defaultValue: 75 },
+              MODE:      { type: ArgumentType.STRING, menu: "motorModes",  defaultValue: "speed" } } },
           { opcode: "stopMotor", blockType: BlockType.COMMAND,
             text: "stop motor [PORT] [ACTION]",
             arguments: {
@@ -243,12 +249,32 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
               DIRECTION: { type: ArgumentType.STRING, menu: "directions", defaultValue: "clockwise" },
               SPEED:     { type: ArgumentType.NUMBER, defaultValue: 75 },
               DEG:       { type: ArgumentType.NUMBER, defaultValue: 360 } } },
+          { opcode: "runMotorForRotations", blockType: BlockType.COMMAND,
+            text: "run motor [PORT] [DIRECTION] at [SPEED] % for [ROT] rotations",
+            arguments: {
+              PORT:      { type: ArgumentType.STRING, menu: "ports",      defaultValue: "A" },
+              DIRECTION: { type: ArgumentType.STRING, menu: "directions", defaultValue: "clockwise" },
+              SPEED:     { type: ArgumentType.NUMBER, defaultValue: 75 },
+              ROT:       { type: ArgumentType.NUMBER, defaultValue: 1 } } },
+
+          // Position & goto — mirrors GoToMotorAbsolutePosition / GoToMotorRelativePosition /
+          // ResetRelativeMotorPosition in LegoSpikeMotors. Relative mode is position-controlled
+          // (holds target) whereas run-for-degrees is speed-controlled (no hold at end). SSP §6.1.
           { opcode: "goToMotorPosition", blockType: BlockType.COMMAND,
             text: "go to motor [PORT] absolute position [POS]° at [SPEED] %",
             arguments: {
               PORT:  { type: ArgumentType.STRING, menu: "ports", defaultValue: "A" },
               POS:   { type: ArgumentType.NUMBER, defaultValue: 0 },
               SPEED: { type: ArgumentType.NUMBER, defaultValue: 75 } } },
+          { opcode: "goToMotorRelativePosition", blockType: BlockType.COMMAND,
+            text: "go to motor [PORT] [DIRECTION] relative position [DEG]° at [SPEED] %",
+            arguments: {
+              PORT:      { type: ArgumentType.STRING, menu: "ports",      defaultValue: "A" },
+              DIRECTION: { type: ArgumentType.STRING, menu: "directions", defaultValue: "clockwise" },
+              DEG:       { type: ArgumentType.NUMBER, defaultValue: 90 },
+              SPEED:     { type: ArgumentType.NUMBER, defaultValue: 75 } } },
+
+          // Configuration — mirrors SetMotorAcceleration / ResetRelativeMotorPosition.
           { opcode: "setMotorAcceleration", blockType: BlockType.COMMAND,
             text: "set motor [PORT] acceleration to [RATE] ms",
             arguments: {
@@ -257,10 +283,16 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "resetMotorPosition", blockType: BlockType.COMMAND,
             text: "reset motor [PORT] position",
             arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "A" } } },
-          { opcode: "getMotorPosition", blockType: BlockType.REPORTER,
-            text: "motor [PORT] position (degrees)",
+
+          // Reads — mirrors GetMotorRelativePosition / GetMotorAbsolutePosition / GetMotorSpeed.
+          // position = cumulative since last reset (unbounded); absolute_position = 0–359 orientation.
+          { opcode: "motorPosition", blockType: BlockType.REPORTER,
+            text: "motor [PORT] relative position (degrees)",
             arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "A" } } },
-          { opcode: "getMotorSpeed", blockType: BlockType.REPORTER,
+          { opcode: "motorAbsolutePosition", blockType: BlockType.REPORTER,
+            text: "motor [PORT] absolute position (0–359)",
+            arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "A" } } },
+          { opcode: "motorSpeed", blockType: BlockType.REPORTER,
             text: "motor [PORT] speed (%)",
             arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "A" } } },
 
@@ -326,16 +358,16 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
 
           "---",
           { blockType: BlockType.LABEL, text: "Sensors" },
-          { opcode: "getColor", blockType: BlockType.REPORTER,
+          { opcode: "color", blockType: BlockType.REPORTER,
             text: "color at [PORT]",
             arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "C" } } },
-          { opcode: "getDistance", blockType: BlockType.REPORTER,
+          { opcode: "distance", blockType: BlockType.REPORTER,
             text: "distance at [PORT] (mm)",
             arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "B" } } },
-          { opcode: "getForce", blockType: BlockType.REPORTER,
+          { opcode: "force", blockType: BlockType.REPORTER,
             text: "force at [PORT] (N)",
             arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "D" } } },
-          { opcode: "getReflectedLight", blockType: BlockType.REPORTER,
+          { opcode: "reflectedLight", blockType: BlockType.REPORTER,
             text: "reflected light at [PORT] (%)",
             arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "C" } } },
           { opcode: "isColor", blockType: BlockType.BOOLEAN,
@@ -356,7 +388,7 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "isForceSensorPressed", blockType: BlockType.BOOLEAN,
             text: "force sensor at [PORT] pressed?",
             arguments: { PORT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "D" } } },
-          { opcode: "getTiltAngle", blockType: BlockType.REPORTER,
+          { opcode: "tiltAngle", blockType: BlockType.REPORTER,
             text: "hub tilt angle [AXIS]",
             arguments: { AXIS: { type: ArgumentType.STRING, menu: "tiltAxes", defaultValue: "pitch" } } },
           { opcode: "isTilted", blockType: BlockType.BOOLEAN,
@@ -369,7 +401,7 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "isHubButtonPressed", blockType: BlockType.BOOLEAN,
             text: "hub [BUTTON] button pressed?",
             arguments: { BUTTON: { type: ArgumentType.STRING, menu: "hubButtons", defaultValue: "Left" } } },
-          { opcode: "getHubTimer", blockType: BlockType.REPORTER, text: "hub timer (seconds)" },
+          { opcode: "hubTimer", blockType: BlockType.REPORTER, text: "hub timer (seconds)" },
           { opcode: "resetHubTimer", blockType: BlockType.COMMAND, text: "reset hub timer" },
           { opcode: "whenColorRead", blockType: BlockType.HAT, isEdgeActivated: false,
             text: "when color changes at [PORT]",
@@ -407,7 +439,7 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "setVolume", blockType: BlockType.COMMAND,
             text: "set hub volume to [LEVEL] %",
             arguments: { LEVEL: { type: ArgumentType.NUMBER, defaultValue: 75 } } },
-          { opcode: "getVolume", blockType: BlockType.REPORTER, text: "hub volume (%)" },
+          { opcode: "volume", blockType: BlockType.REPORTER, text: "hub volume (%)" },
 
           "---",
           { blockType: BlockType.LABEL, text: "System" },
@@ -418,8 +450,8 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "requestTemperature",  blockType: BlockType.COMMAND, text: "get hub temperature" },
           { opcode: "requestCharging",     blockType: BlockType.COMMAND, text: "get hub charging state" },
           // Reporters return the last cached value (updated by the commands above).
-          { opcode: "getBatteryLevel", blockType: BlockType.REPORTER, text: "hub battery (%)" },
-          { opcode: "getTemperature",  blockType: BlockType.REPORTER, text: "hub temperature (°C)" },
+          { opcode: "batteryLevel", blockType: BlockType.REPORTER, text: "hub battery (%)" },
+          { opcode: "temperature",  blockType: BlockType.REPORTER, text: "hub temperature (°C)" },
           { opcode: "isCharging",      blockType: BlockType.BOOLEAN,  text: "hub charging?" },
 
           "---",
@@ -438,12 +470,13 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "changeTempo", blockType: BlockType.COMMAND,
             text: "change tempo by [DELTA] BPM",
             arguments: { DELTA: { type: ArgumentType.NUMBER, defaultValue: 10 } } },
-          { opcode: "getTempo", blockType: BlockType.REPORTER, text: "tempo (BPM)" },
+          { opcode: "tempo", blockType: BlockType.REPORTER, text: "tempo (BPM)" },
         ],
 
         menus: {
           ports:       { acceptReporters: true, items: menuOf(PORTS) },
           directions:  { acceptReporters: true, items: menuOf(DIRECTIONS) },
+          motorModes:  { acceptReporters: false, items: menuOf(MOTOR_MODES) },
           stopActions: { acceptReporters: true, items: menuOf(STOP_ACTS) },
           colors:      { acceptReporters: true, items: menuOf(COLORS) },
           hubFaces:    { acceptReporters: true, items: menuOf(HUB_FACES) },
@@ -469,8 +502,8 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
         await client.connect();
       } catch (e) {
         client = null;
-        lastErrorMessage = e && e.message ? e.message : String(e);
-        lastErrorCode    = 0;
+        errMessage  = e && e.message ? e.message : String(e);
+        errCode     = 0;
         flags.error      = true;
         console.error("[SolariaSpikePrime] connect error:", e);
       }
@@ -502,9 +535,9 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     lastDisconnectReason() { return disconnectReason; }
 
     // Error hat + reporters (mirrors ErrorOccurred / OnError)
-    whenErrorOccurs()      { const v = flags.error; flags.error = false; return v; }
-    getLastErrorMessage()  { return lastErrorMessage; }
-    getLastErrorCode()     { return lastErrorCode; }
+    whenErrorOccurs()    { const v = flags.error; flags.error = false; return v; }
+    lastErrorMessage()   { return errMessage; }
+    lastErrorCode()      { return errCode; }
 
     // Configuration
     setNameFilter({ PREFIX }) { nameFilter = Cast.toString(PREFIX).trim(); }
@@ -514,8 +547,11 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     }
 
     // ── Motors ──────────────────────────────────────────────────────────────────
-    startMotor({ PORT, DIRECTION, SPEED }) {
-      return send({ cmd: "motor.run", port: PORT, speed: signed(DIRECTION, SPEED) });
+    // Run / stop
+    startMotor({ PORT, DIRECTION, SPEED, MODE }) {
+      const cmd = { cmd: "motor.run", port: PORT, speed: signed(DIRECTION, SPEED) };
+      if (Cast.toString(MODE) === "power") cmd.mode = "power";
+      return send(cmd);
     }
     stopMotor({ PORT, ACTION }) {
       return send({ cmd: "motor.stop", port: PORT, stop_action: ACTION });
@@ -528,18 +564,30 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
       return send({ cmd: "motor.run", port: PORT, speed: signed(DIRECTION, SPEED),
         duration: Cast.toNumber(DEG), duration_unit: "degrees" });
     }
+    runMotorForRotations({ PORT, DIRECTION, SPEED, ROT }) {
+      return send({ cmd: "motor.run", port: PORT, speed: signed(DIRECTION, SPEED),
+        duration: Cast.toNumber(ROT), duration_unit: "rotations" });
+    }
+    // Position & goto
     goToMotorPosition({ PORT, POS, SPEED }) {
       const pos = Math.max(0, Math.min(359, Cast.toNumber(POS)));
       return send({ cmd: "motor.goto", port: PORT, position: pos,
         speed: Math.abs(Cast.toNumber(SPEED)), mode: "absolute" });
     }
+    goToMotorRelativePosition({ PORT, DIRECTION, DEG, SPEED }) {
+      return send({ cmd: "motor.goto", port: PORT, position: signed(DIRECTION, DEG),
+        speed: Math.abs(Cast.toNumber(SPEED)), mode: "relative" });
+    }
+    // Configuration
     setMotorAcceleration({ PORT, RATE }) {
       return send({ cmd: "motor.set_acceleration", port: PORT,
         rate: Math.max(0, Math.min(10000, Cast.toNumber(RATE))) });
     }
     resetMotorPosition({ PORT }) { return send({ cmd: "motor.reset", port: PORT }); }
-    getMotorPosition({ PORT }) { return readSensor(PORT, "position", 0); }
-    getMotorSpeed({ PORT })    { return readSensor(PORT, "speed", 0); }
+    // Reads
+    motorPosition({ PORT })         { return readSensor(PORT, "position", 0); }
+    motorAbsolutePosition({ PORT }) { return readSensor(PORT, "absolute_position", 0); }
+    motorSpeed({ PORT })            { return readSensor(PORT, "speed", 0); }
 
     // ── Movement ──────────────────────────────────────────────────────────────────
     setMovementPair({ LEFT, RIGHT }) {
@@ -598,10 +646,10 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     }
 
     // ── Sensors (reporters & booleans use one-shot request/response) ────────────────
-    getColor({ PORT })          { return readSensor(PORT, "color", ""); }
-    getDistance({ PORT })       { return readSensor(PORT, "distance", -1); }
-    getForce({ PORT })          { return readSensor(PORT, "force", 0); }
-    getReflectedLight({ PORT }) { return readSensor(PORT, "reflected", 0); }
+    color({ PORT })          { return readSensor(PORT, "color", ""); }
+    distance({ PORT })       { return readSensor(PORT, "distance", -1); }
+    force({ PORT })          { return readSensor(PORT, "force", 0); }
+    reflectedLight({ PORT }) { return readSensor(PORT, "reflected", 0); }
 
     async isColor({ PORT, COLOR }) {
       const ev = await requestEvent(
@@ -625,7 +673,7 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
       return requestEvent({ cmd: "sensor.read", port: PORT, type: "touched" },
         sensorMatch(PORT, "touched")).then((ev) => !!(ev && ev.value));
     }
-    getTiltAngle({ AXIS }) { return readSensor("imu", Cast.toString(AXIS).toLowerCase(), 0); }
+    tiltAngle({ AXIS }) { return readSensor("imu", Cast.toString(AXIS).toLowerCase(), 0); }
     async isTilted({ DIRECTION }) {
       const dir = Cast.toString(DIRECTION).toLowerCase();
       const ev = await requestEvent(
@@ -651,7 +699,7 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
         systemMatch("is_button_pressed"));
       return !!(ev && ev.value && ev.value.pressed);
     }
-    async getHubTimer() {
+    async hubTimer() {
       const ev = await requestEvent({ cmd: "timer.get" }, sensorMatch("timer", "elapsed"));
       return ev ? ev.value : 0;
     }
@@ -686,7 +734,7 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     setVolume({ LEVEL }) {
       return send({ cmd: "sound.set_volume", level: Math.max(0, Math.min(100, Cast.toNumber(LEVEL))) });
     }
-    async getVolume() {
+    async volume() {
       const ev = await requestEvent({ cmd: "sound.read", metric: "volume" },
         (e) => e.event === "sound" && e.metric === "volume");
       return ev ? ev.value : 0;
@@ -699,9 +747,9 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     requestTemperature()  { return send({ cmd: "system.read", metric: "temperature" }); }
     requestCharging()     { return send({ cmd: "system.read", metric: "charging" }); }
     // Reporters return the last value received from the hub (updated by the commands above).
-    getBatteryLevel()  { return sysCache.battery; }
-    getTemperature()   { return sysCache.temperature; }
-    isCharging()       { return sysCache.charging; }
+    batteryLevel() { return sysCache.battery; }
+    temperature()  { return sysCache.temperature; }
+    isCharging()   { return sysCache.charging; }
 
     // ── Music (client-side tempo; await duration so notes sequence in Scratch) ───────
     async playNoteForBeats({ NOTE, BEATS }) {
@@ -716,9 +764,9 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
       await send({ cmd: "sound.rest", duration: ms });
       await waitMs(ms);
     }
-    setTempo({ BPM })     { tempo = Math.max(1, Cast.toNumber(BPM)); }
+    setTempo({ BPM })      { tempo = Math.max(1, Cast.toNumber(BPM)); }
     changeTempo({ DELTA }) { tempo = Math.max(1, tempo + Cast.toNumber(DELTA)); }
-    getTempo()            { return tempo; }
+    tempo()                { return tempo; }
   }
 
   Scratch.extensions.register(new SolariaSpikePrime());
