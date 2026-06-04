@@ -55,6 +55,18 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   let leftPort = "E", rightPort = "F";   // movement pair (set by setMovementPair)
   let tempo = 120;                        // music tempo (client-side)
 
+  // Connection state (mirrors App Inventor LegoSpikeConnectivity properties)
+  let connected       = false;
+  let deviceName      = "";
+  let capability      = {};
+  let disconnectReason = "";
+  let nameFilter      = "";           // CustomDeviceName equivalent
+  let debugEnabled    = false;        // DebugMode equivalent
+
+  // Error state (mirrors OnError / ErrorOccurred events)
+  let lastErrorMessage = "";
+  let lastErrorCode    = 0;
+
   // System metric cache — updated by routeSSP whenever a system event arrives.
   // Reporters return this synchronously; command blocks trigger a fresh read.
   const sysCache = { battery: 0, temperature: 0, charging: false };
@@ -63,6 +75,7 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   const flags = {
     hubConnected: false,
     hubDisconnected: false,
+    error:           false,
     colorChanged:    {},   // port → bool
     distanceChanged: {},   // port → bool
     buttonPressed:   { Left: false, Right: false },
@@ -73,10 +86,20 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   // ─── Connection event routing ────────────────────────────────────────────────
   function onClientEvent(ev) {
     if (ev.type === "connected") {
+      connected    = true;
+      deviceName   = ev.deviceName  || "";
+      capability   = ev.capability  || {};
       flags.hubConnected = true;
     } else if (ev.type === "disconnected") {
+      connected        = false;
+      disconnectReason = ev.reason || "";
       flags.hubDisconnected = true;
       client = null;
+    } else if (ev.type === "error") {
+      // Transport / lifecycle error (mirrors ErrorOccurred in LegoSpikeConnectivity)
+      lastErrorMessage = ev.message || "";
+      lastErrorCode    = 0;
+      flags.error      = true;
     } else if (ev.type === "ssp") {
       routeSSP(ev.event);
     }
@@ -86,6 +109,13 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
   // Mirrors the App Inventor onHubData dispatch pattern across all components.
   function routeSSP(ev) {
     if (!ev) return;
+    // SSP §7 error frames (mirrors LegoSpikeConnectivity.OnError)
+    if (ev.event === "error") {
+      lastErrorCode    = ev.code    || 0;
+      lastErrorMessage = ev.message || "";
+      flags.error      = true;
+      return;
+    }
     if (ev.event === "sensor") {
       if (ev.type === "color")    flags.colorChanged[ev.port] = true;
       if (ev.type === "distance") flags.distanceChanged[ev.port] = true;
@@ -154,11 +184,37 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
         color2: "#0082B5",
         blocks: [
           { blockType: BlockType.LABEL, text: "Connection" },
-          { opcode: "connect", blockType: BlockType.COMMAND, text: "connect to SPIKE Prime" },
+
+          // Connect / disconnect (Web Bluetooth: browser chooser handles device selection)
+          { opcode: "connect",    blockType: BlockType.COMMAND, text: "connect to SPIKE Prime" },
           { opcode: "disconnect", blockType: BlockType.COMMAND, text: "disconnect from hub" },
           { opcode: "isConnected", blockType: BlockType.BOOLEAN, text: "connected?" },
-          { opcode: "whenHubConnected", blockType: BlockType.HAT, isEdgeActivated: false, text: "when hub connected" },
+
+          // Hub identity reporters — populated from the SSP v0.8 capability declaration (§5)
+          // Mirrors HubConnected(deviceName, deviceType, sspVersion, availablePorts, supportedEncodings)
+          { opcode: "connectedHubName", blockType: BlockType.REPORTER, text: "connected hub name" },
+          { opcode: "hubDeviceType",    blockType: BlockType.REPORTER, text: "hub device type" },
+          { opcode: "hubSSPVersion",    blockType: BlockType.REPORTER, text: "hub SSP version" },
+          { opcode: "hubAvailablePorts",blockType: BlockType.REPORTER, text: "hub available ports" },
+          { opcode: "hubEncodings",     blockType: BlockType.REPORTER, text: "hub encodings" },
+
+          // Connection events — mirrors HubConnected / HubDisconnected / ErrorOccurred + OnError
+          { opcode: "whenHubConnected",    blockType: BlockType.HAT, isEdgeActivated: false, text: "when hub connected" },
           { opcode: "whenHubDisconnected", blockType: BlockType.HAT, isEdgeActivated: false, text: "when hub disconnected" },
+          { opcode: "lastDisconnectReason",blockType: BlockType.REPORTER, text: "last disconnect reason" },
+          { opcode: "whenErrorOccurs",      blockType: BlockType.HAT, isEdgeActivated: false, text: "when error occurs" },
+          { opcode: "getLastErrorMessage", blockType: BlockType.REPORTER, text: "last error message" },
+          { opcode: "getLastErrorCode",    blockType: BlockType.REPORTER, text: "last error code" },
+
+          // Configuration — mirrors CustomDeviceName (namePrefix filter) and DebugMode
+          { opcode: "setNameFilter",
+            blockType: BlockType.COMMAND,
+            text: "set hub name filter to [PREFIX]",
+            arguments: { PREFIX: { type: ArgumentType.STRING, defaultValue: "LEGO" } } },
+          { opcode: "setDebugLogging",
+            blockType: BlockType.COMMAND,
+            text: "set debug logging [STATE]",
+            arguments: { STATE: { type: ArgumentType.STRING, menu: "debugStates", defaultValue: "on" } } },
 
           "---",
           { blockType: BlockType.LABEL, text: "Motors" },
@@ -397,6 +453,7 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           btnColors:   { acceptReporters: true, items: menuOf(BTN_COLORS) },
           images:      { acceptReporters: true, items: menuOf(IMAGES) },
           notes:       { acceptReporters: true, items: menuOf(NOTES) },
+          debugStates: { acceptReporters: false, items: menuOf(["on", "off"]) },
         },
       };
     }
@@ -404,18 +461,57 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
     // ── Connectivity ────────────────────────────────────────────────────────────
     async connect() {
       try {
-        client = new SpikeClient(new WebBleTransport(), HUB_PROGRAM);
+        connected = false;
+        const transport = new WebBleTransport(nameFilter ? { namePrefix: nameFilter } : undefined);
+        client = new SpikeClient(transport, HUB_PROGRAM);
+        if (debugEnabled) client.setDebug(true);
         client.on(onClientEvent);
         await client.connect();
       } catch (e) {
         client = null;
+        lastErrorMessage = e && e.message ? e.message : String(e);
+        lastErrorCode    = 0;
+        flags.error      = true;
         console.error("[SolariaSpikePrime] connect error:", e);
       }
     }
     async disconnect() { if (client) await client.disconnect().catch(() => {}); }
-    isConnected() { return !!client; }
+
+    // isConnected backed by the real connected flag (not !!client, which is truthy
+    // during the connecting phase before capability arrives — mirrors App Inventor IsConnected).
+    isConnected() { return connected; }
+
+    // Hub identity reporters (capability fields from SSP v0.8 §5 declaration)
+    connectedHubName()     { return deviceName; }
+    hubDeviceType()        { return (capability.device    ?? "") + ""; }
+    hubSSPVersion()        { return (capability.ssp_version ?? "") + ""; }
+    hubAvailablePorts() {
+      const ports = capability.ports;
+      if (!Array.isArray(ports)) return "";
+      return ports.map((p) => p.id || "").filter(Boolean).join(",");
+    }
+    hubEncodings() {
+      const enc = capability.encodings;
+      if (!Array.isArray(enc)) return "";
+      return enc.join(",");
+    }
+
+    // Connection event hats
     whenHubConnected()    { const v = flags.hubConnected;    flags.hubConnected    = false; return v; }
     whenHubDisconnected() { const v = flags.hubDisconnected; flags.hubDisconnected = false; return v; }
+    lastDisconnectReason() { return disconnectReason; }
+
+    // Error hat + reporters (mirrors ErrorOccurred / OnError)
+    whenErrorOccurs()      { const v = flags.error; flags.error = false; return v; }
+    getLastErrorMessage()  { return lastErrorMessage; }
+    getLastErrorCode()     { return lastErrorCode; }
+
+    // Configuration
+    setNameFilter({ PREFIX }) { nameFilter = Cast.toString(PREFIX).trim(); }
+    setDebugLogging({ STATE }) {
+      debugEnabled = Cast.toString(STATE).toLowerCase() === "on";
+      if (client) client.setDebug(debugEnabled);
+    }
 
     // ── Motors ──────────────────────────────────────────────────────────────────
     startMotor({ PORT, DIRECTION, SPEED }) {

@@ -226,6 +226,11 @@
       this.listeners = [];
       // Heartbeat
       this.lastPong = 0;
+      // Disconnect guard — prevents double-emit if heartbeat timeout and transport drop race
+      this.disconnected = true;
+      // starts true; flipped false at connect(), true at emitDisconnected()
+      // Debug logging (mirrors App Inventor's DebugMode property)
+      this.debug = false;
       // Device identity (set after BLE pairing — used for hash cache key)
       this.deviceId = "unknown";
       this.programHash = djb2(hubProgram);
@@ -237,9 +242,16 @@
       const i = this.listeners.indexOf(cb);
       if (i >= 0) this.listeners.splice(i, 1);
     }
+    /** Toggle verbose console.debug output (mirrors App Inventor DebugMode). */
+    setDebug(enabled) {
+      this.debug = enabled;
+    }
     // Full connect lifecycle. MUST be called from a user gesture (Web Bluetooth).
     async connect() {
+      var _a, _b;
+      this.disconnected = false;
       this.transport.onReceive((b) => this.onBytes(b));
+      (_b = (_a = this.transport).onDisconnect) == null ? void 0 : _b.call(_a, () => this.emitDisconnected("connection_lost"));
       await this.transport.connect();
       const info = await this.sendAndAwait(
         pack(infoRequest()),
@@ -291,7 +303,7 @@
     async disconnect() {
       this.stopHeartbeat();
       await this.transport.disconnect();
-      this.emit({ type: "disconnected", reason: "user" });
+      this.emitDisconnected("user");
     }
     // ─── RX reassembly ──────────────────────────────────────────────────────────
     onBytes(bytes) {
@@ -352,7 +364,7 @@
         });
         if (performance.now() - this.lastPong > PONG_TIMEOUT_MS) {
           this.stopHeartbeat();
-          this.emit({ type: "disconnected", reason: "heartbeat_lost" });
+          this.emitDisconnected("heartbeat_lost");
         }
       }, HEARTBEAT_MS);
     }
@@ -416,8 +428,15 @@
     emit(e) {
       this.listeners.forEach((l) => l(e));
     }
+    /** Single exit point for all disconnect paths — guards against double-emit. */
+    emitDisconnected(reason) {
+      if (this.disconnected) return;
+      this.disconnected = true;
+      this.stopHeartbeat();
+      this.emit({ type: "disconnected", reason });
+    }
     log(msg) {
-      console.debug("[SpikeClient]", msg);
+      if (this.debug) console.debug("[SpikeClient]", msg);
     }
   };
 
@@ -426,13 +445,18 @@
   var RX_UUID = "0000fd02-0001-1000-8000-00805f9b34fb";
   var TX_UUID = "0000fd02-0002-1000-8000-00805f9b34fb";
   var WebBleTransport = class {
-    constructor() {
+    constructor(opts = {}) {
+      this.opts = opts;
       this.maxPacketSize = 20;
     }
     // MUST be called from a user gesture (block click).
     async connect() {
-      const dev = await navigator.bluetooth.requestDevice({
-        filters: [{ services: [SERVICE_UUID] }]
+      const filter = { services: [SERVICE_UUID] };
+      if (this.opts.namePrefix) filter.namePrefix = this.opts.namePrefix;
+      const dev = await navigator.bluetooth.requestDevice({ filters: [filter] });
+      dev.addEventListener("gattserverdisconnected", () => {
+        var _a;
+        return (_a = this.disconnectCb) == null ? void 0 : _a.call(this);
       });
       const gatt = await dev.gatt.connect();
       this.gatt = gatt;
@@ -465,6 +489,9 @@
     }
     onReceive(cb) {
       this.rxCb = cb;
+    }
+    onDisconnect(cb) {
+      this.disconnectCb = cb;
     }
   };
 
@@ -1940,10 +1967,19 @@ if __name__ == '__main__':\r
     let client = null;
     let leftPort = "E", rightPort = "F";
     let tempo = 120;
+    let connected = false;
+    let deviceName = "";
+    let capability = {};
+    let disconnectReason = "";
+    let nameFilter = "";
+    let debugEnabled = false;
+    let lastErrorMessage = "";
+    let lastErrorCode = 0;
     const sysCache = { battery: 0, temperature: 0, charging: false };
     const flags = {
       hubConnected: false,
       hubDisconnected: false,
+      error: false,
       colorChanged: {},
       // port → bool
       distanceChanged: {},
@@ -1954,16 +1990,31 @@ if __name__ == '__main__':\r
     const buttonState = { Left: false, Right: false };
     function onClientEvent(ev) {
       if (ev.type === "connected") {
+        connected = true;
+        deviceName = ev.deviceName || "";
+        capability = ev.capability || {};
         flags.hubConnected = true;
       } else if (ev.type === "disconnected") {
+        connected = false;
+        disconnectReason = ev.reason || "";
         flags.hubDisconnected = true;
         client = null;
+      } else if (ev.type === "error") {
+        lastErrorMessage = ev.message || "";
+        lastErrorCode = 0;
+        flags.error = true;
       } else if (ev.type === "ssp") {
         routeSSP(ev.event);
       }
     }
     function routeSSP(ev) {
       if (!ev) return;
+      if (ev.event === "error") {
+        lastErrorCode = ev.code || 0;
+        lastErrorMessage = ev.message || "";
+        flags.error = true;
+        return;
+      }
       if (ev.event === "sensor") {
         if (ev.type === "color") flags.colorChanged[ev.port] = true;
         if (ev.type === "distance") flags.distanceChanged[ev.port] = true;
@@ -2032,11 +2083,37 @@ if __name__ == '__main__':\r
           color2: "#0082B5",
           blocks: [
             { blockType: BlockType.LABEL, text: "Connection" },
+            // Connect / disconnect (Web Bluetooth: browser chooser handles device selection)
             { opcode: "connect", blockType: BlockType.COMMAND, text: "connect to SPIKE Prime" },
             { opcode: "disconnect", blockType: BlockType.COMMAND, text: "disconnect from hub" },
             { opcode: "isConnected", blockType: BlockType.BOOLEAN, text: "connected?" },
+            // Hub identity reporters — populated from the SSP v0.8 capability declaration (§5)
+            // Mirrors HubConnected(deviceName, deviceType, sspVersion, availablePorts, supportedEncodings)
+            { opcode: "connectedHubName", blockType: BlockType.REPORTER, text: "connected hub name" },
+            { opcode: "hubDeviceType", blockType: BlockType.REPORTER, text: "hub device type" },
+            { opcode: "hubSSPVersion", blockType: BlockType.REPORTER, text: "hub SSP version" },
+            { opcode: "hubAvailablePorts", blockType: BlockType.REPORTER, text: "hub available ports" },
+            { opcode: "hubEncodings", blockType: BlockType.REPORTER, text: "hub encodings" },
+            // Connection events — mirrors HubConnected / HubDisconnected / ErrorOccurred + OnError
             { opcode: "whenHubConnected", blockType: BlockType.HAT, isEdgeActivated: false, text: "when hub connected" },
             { opcode: "whenHubDisconnected", blockType: BlockType.HAT, isEdgeActivated: false, text: "when hub disconnected" },
+            { opcode: "lastDisconnectReason", blockType: BlockType.REPORTER, text: "last disconnect reason" },
+            { opcode: "whenErrorOccurs", blockType: BlockType.HAT, isEdgeActivated: false, text: "when error occurs" },
+            { opcode: "getLastErrorMessage", blockType: BlockType.REPORTER, text: "last error message" },
+            { opcode: "getLastErrorCode", blockType: BlockType.REPORTER, text: "last error code" },
+            // Configuration — mirrors CustomDeviceName (namePrefix filter) and DebugMode
+            {
+              opcode: "setNameFilter",
+              blockType: BlockType.COMMAND,
+              text: "set hub name filter to [PREFIX]",
+              arguments: { PREFIX: { type: ArgumentType.STRING, defaultValue: "LEGO" } }
+            },
+            {
+              opcode: "setDebugLogging",
+              blockType: BlockType.COMMAND,
+              text: "set debug logging [STATE]",
+              arguments: { STATE: { type: ArgumentType.STRING, menu: "debugStates", defaultValue: "on" } }
+            },
             "---",
             { blockType: BlockType.LABEL, text: "Motors" },
             {
@@ -2428,18 +2505,25 @@ if __name__ == '__main__':\r
             tiltAxes: { acceptReporters: true, items: menuOf(TILT_AXES) },
             btnColors: { acceptReporters: true, items: menuOf(BTN_COLORS) },
             images: { acceptReporters: true, items: menuOf(IMAGES) },
-            notes: { acceptReporters: true, items: menuOf(NOTES) }
+            notes: { acceptReporters: true, items: menuOf(NOTES) },
+            debugStates: { acceptReporters: false, items: menuOf(["on", "off"]) }
           }
         };
       }
       // ── Connectivity ────────────────────────────────────────────────────────────
       async connect() {
         try {
-          client = new SpikeClient(new WebBleTransport(), hub_controller_default);
+          connected = false;
+          const transport = new WebBleTransport(nameFilter ? { namePrefix: nameFilter } : void 0);
+          client = new SpikeClient(transport, hub_controller_default);
+          if (debugEnabled) client.setDebug(true);
           client.on(onClientEvent);
           await client.connect();
         } catch (e) {
           client = null;
+          lastErrorMessage = e && e.message ? e.message : String(e);
+          lastErrorCode = 0;
+          flags.error = true;
           console.error("[SolariaSpikePrime] connect error:", e);
         }
       }
@@ -2447,9 +2531,32 @@ if __name__ == '__main__':\r
         if (client) await client.disconnect().catch(() => {
         });
       }
+      // isConnected backed by the real connected flag (not !!client, which is truthy
+      // during the connecting phase before capability arrives — mirrors App Inventor IsConnected).
       isConnected() {
-        return !!client;
+        return connected;
       }
+      // Hub identity reporters (capability fields from SSP v0.8 §5 declaration)
+      connectedHubName() {
+        return deviceName;
+      }
+      hubDeviceType() {
+        return (capability.device ?? "") + "";
+      }
+      hubSSPVersion() {
+        return (capability.ssp_version ?? "") + "";
+      }
+      hubAvailablePorts() {
+        const ports = capability.ports;
+        if (!Array.isArray(ports)) return "";
+        return ports.map((p) => p.id || "").filter(Boolean).join(",");
+      }
+      hubEncodings() {
+        const enc3 = capability.encodings;
+        if (!Array.isArray(enc3)) return "";
+        return enc3.join(",");
+      }
+      // Connection event hats
       whenHubConnected() {
         const v = flags.hubConnected;
         flags.hubConnected = false;
@@ -2459,6 +2566,29 @@ if __name__ == '__main__':\r
         const v = flags.hubDisconnected;
         flags.hubDisconnected = false;
         return v;
+      }
+      lastDisconnectReason() {
+        return disconnectReason;
+      }
+      // Error hat + reporters (mirrors ErrorOccurred / OnError)
+      whenErrorOccurs() {
+        const v = flags.error;
+        flags.error = false;
+        return v;
+      }
+      getLastErrorMessage() {
+        return lastErrorMessage;
+      }
+      getLastErrorCode() {
+        return lastErrorCode;
+      }
+      // Configuration
+      setNameFilter({ PREFIX }) {
+        nameFilter = Cast.toString(PREFIX).trim();
+      }
+      setDebugLogging({ STATE }) {
+        debugEnabled = Cast.toString(STATE).toLowerCase() === "on";
+        if (client) client.setDebug(debugEnabled);
       }
       // ── Motors ──────────────────────────────────────────────────────────────────
       startMotor({ PORT, DIRECTION, SPEED }) {
