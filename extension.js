@@ -1970,7 +1970,7 @@ if __name__ == '__main__':\r
     const menuOf = (arr) => arr.map((v) => ({ text: v, value: v }));
     const signed = (dir, mag) => dir === "counterclockwise" || dir === "backward" ? -Math.abs(Cast.toNumber(mag)) : Math.abs(Cast.toNumber(mag));
     let client = null;
-    let leftPort = "E", rightPort = "F";
+    let leftPort = "A", rightPort = "B";
     let wheelCircumference = 17.6;
     let tempo = 120;
     let connected = false;
@@ -2341,8 +2341,8 @@ if __name__ == '__main__':\r
               blockType: BlockType.COMMAND,
               text: "set movement motors [LEFT] (left) [RIGHT] (right)",
               arguments: {
-                LEFT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "E" },
-                RIGHT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "F" }
+                LEFT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "A" },
+                RIGHT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "B" }
               }
             },
             {

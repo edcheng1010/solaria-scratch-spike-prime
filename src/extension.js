@@ -62,7 +62,7 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
 
   // ─── State ──────────────────────────────────────────────────────────────────
   let client = null;
-  let leftPort = "E", rightPort = "F";   // movement pair (set by setMovementPair)
+  let leftPort = "A", rightPort = "B";   // movement pair (set by setMovementPair)
   let wheelCircumference = 17.6;         // cm per wheel rotation (default ≈56 mm wheel; set via setWheelCircumference)
   let tempo = 120;                        // music tempo (client-side)
 
@@ -378,8 +378,8 @@ import HUB_PROGRAM from "../../solaria-lib-spike-prime/hub/hub_controller.py";
           { opcode: "setMovementPair", blockType: BlockType.COMMAND,
             text: "set movement motors [LEFT] (left) [RIGHT] (right)",
             arguments: {
-              LEFT:  { type: ArgumentType.STRING, menu: "ports", defaultValue: "E" },
-              RIGHT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "F" } } },
+              LEFT:  { type: ArgumentType.STRING, menu: "ports", defaultValue: "A" },
+              RIGHT: { type: ArgumentType.STRING, menu: "ports", defaultValue: "B" } } },
           { opcode: "setMovementAcceleration", blockType: BlockType.COMMAND,
             text: "set movement acceleration to [RATE] ms",
             arguments: { RATE: { type: ArgumentType.NUMBER, defaultValue: 500 } } },
