@@ -1,8 +1,8 @@
 # solaria-scratch-spike-prime
 
-A **Scratch 3.0 extension** (TurboWarp/PenguinMod) that controls a LEGO® SPIKE™ Prime hub over
-Bluetooth — no Scratch Link, no install. Part of the [Solaria](https://github.com/edcheng1010/solaria-hub)
-platform.
+A **Scratch 3.0 extension** (TurboWarp/PenguinMod) that controls a LEGO® SPIKE™ Prime hub over Bluetooth — no Scratch Link, no install, works on physical hubs.
+
+This extension is the **Scratch/TurboWarp client** in the [Solaria](https://github.com/edcheng1010/solaria-hub) open-source robotics ecosystem. It implements the [Solaria Standard Protocol (SSP)](https://github.com/edcheng1010/solaria-hub/blob/main/spec/SSP-v0.8.md), which means the robot capabilities available here — motor control, sensor reading, real-time feedback — are the same as those available in the App Inventor and other Solaria clients. Scratch code is event-driven and block-sequential, which is different from App Inventor's stateful component model; both are valid approaches to the same hardware capabilities.
 
 > **Unofficial integration.** Independent open-source project, not affiliated with, endorsed by, or
 > sponsored by the LEGO Group, the Scratch Foundation, or MIT. Trademarks belong to their respective
@@ -69,6 +69,20 @@ The following App Inventor capabilities have no Scratch equivalent due to Web Bl
 
 Battery level, temperature, and charging state are available via the System blocks (`get hub battery level`, `get hub temperature`, `get hub charging state`).
 
+## Part of the Solaria Ecosystem
+
+This repository is one client extension in the [Solaria](https://github.com/edcheng1010/solaria-hub) open-source robotics ecosystem. Solaria supports multiple programming environments and multiple hardware platforms through a shared communication protocol (SSP). Each environment has its own purpose-built extension — this one is for Scratch/TurboWarp.
+
+| What is the same across Solaria clients | What is different |
+|---|---|
+| Robot capabilities: motor control, sensor reading, real-time feedback, AI integration | Block names, event patterns, and code structure (each platform feels native) |
+| SSP wire protocol (the messages sent to the robot) | Connection model (App Inventor scans for devices; Scratch uses the browser's built-in chooser) |
+| Supported hardware combinations | Platform-specific limitations (e.g., RSSI not available via Web Bluetooth) |
+
+For the full picture — hardware roadmap, architecture, and how to contribute — see [solaria-hub](https://github.com/edcheng1010/solaria-hub).
+
 ## Status
-Phase 4a — blocks implemented and hardware-tested (Connection class parity with App Inventor).
-See [`../solaria-lib-spike-prime/PHASE_4A_PLAN.md`](../solaria-lib-spike-prime/PHASE_4A_PLAN.md).
+
+✅ **Supported** — blocks implemented and hardware-tested on physical SPIKE Prime hubs. All 8 component classes (Connection, Motors, Movement, Light, Sensors, Sound, System, Music) are at parity with the App Inventor extension.
+
+See the [Solaria Hub Roadmap](https://github.com/edcheng1010/solaria-hub/blob/main/ROADMAP.md) for the full ecosystem status and upcoming Gen 2 work (additional hardware support, Python client, Web client).
