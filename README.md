@@ -10,6 +10,10 @@ This extension is the **Scratch/TurboWarp client** in the [Solaria](https://gith
 
 ## How it works
 
+This extension connects your laptop or Chromebook to a SPIKE Prime hub via Web Bluetooth, turning the browser into the robot's command center. The Scratch program running in TurboWarp handles all logic, decision-making, and AI capabilities (such as webcam-based classification via Scratch extensions). The SPIKE Prime hub executes motor commands and reports sensor data back to the browser.
+
+The programming model is event-driven — hat blocks trigger in response to sensor changes, connection events, and user input. This is different from App Inventor's stateful component model, but both expose the same underlying robot capabilities.
+
 The extension bundles the `@solaria/spike-prime` Web Bluetooth client (`../solaria-lib-spike-prime/web`).
 It runs as an **unsandboxed** TurboWarp extension (page script context) so it can call
 `navigator.bluetooth` directly. Block surface mirrors the App Inventor extension's 8 components, using the
